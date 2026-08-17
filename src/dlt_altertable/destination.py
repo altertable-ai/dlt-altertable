@@ -63,9 +63,11 @@ def declared_columns(table: TTableSchema, parquet_schema: pa.Schema) -> list[str
 
 @dlt.destination(
     name="altertable",
+    naming_convention="direct",
     loader_file_format="parquet",
     batch_size=0,
     skip_dlt_columns_and_tables=True,
+    max_table_nesting=0,
     loader_parallelism_strategy="table-sequential",
 )
 def altertable(
@@ -102,7 +104,5 @@ def altertable(
         for batch in parquet_file.iter_batches(columns=columns):
             writer.write(batch)
 
-    # dlt retries a failed job inside the same load package, so a table only counts as replaced
-    # once its transaction has committed.
     if mode is IngestTableMode.REPLACE:
         replaced_tables.append(table["name"])
