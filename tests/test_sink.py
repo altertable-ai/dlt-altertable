@@ -299,6 +299,26 @@ def test_parquet_file_is_streamed_into_a_committed_transaction(
 
 
 @pytest.mark.usefixtures("replaced_tables")
+def test_every_parquet_batch_is_streamed(recorder: FlightRecorder, write_parquet) -> None:
+    many_rows = [{"id": row, "lastmodifieddate": row} for row in range(70_000)]
+
+    sink(write_parquet(many_rows), table_schema("contacts", "append"), **CONNECTION)
+
+    ingest = recorder.ingests[0]
+    assert len(ingest.batches) == 2, "70,000 rows must span two default-sized arrow batches"
+    assert sum(batch.num_rows for batch in ingest.batches) == 70_000
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_missing_parquet_columns_narrow_the_ingest_schema(
+    recorder: FlightRecorder, write_parquet
+) -> None:
+    sink(write_parquet([{"id": 1}]), table_schema("contacts", "append"), **CONNECTION)
+
+    assert recorder.ingests[0].schema.names == ["id"]
+
+
+@pytest.mark.usefixtures("replaced_tables")
 def test_empty_parquet_file_still_creates_the_table(recorder: FlightRecorder, tmp_path) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq

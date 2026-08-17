@@ -7,6 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from altertable_flightsql.client import IngestIncrementalOptions, IngestTableMode
+from dlt.common.destination.exceptions import DestinationTerminalException
 from pyarrow.flight import FlightUnauthenticatedError
 
 import dlt_altertable.destination
@@ -37,6 +38,8 @@ class FlightRecorder:
     statements: list[str] = field(default_factory=list)
     existing_columns: list[str] = field(default_factory=list)
     transient_ingest_failures: int = 0
+    successes_before_transient_failures: int = 0
+    terminal_ingest_failure: bool = False
     unauthenticated: bool = False
 
     def ingests_for(self, table_name: str) -> list[RecordedIngest]:
@@ -115,7 +118,11 @@ def recording_client_class(recorder: FlightRecorder) -> type:
             transaction: RecordingTransaction,
         ) -> RecordingWriter:
             recorder.calls.append("ingest")
-            if recorder.transient_ingest_failures:
+            if recorder.successes_before_transient_failures > 0:
+                recorder.successes_before_transient_failures -= 1
+            elif recorder.terminal_ingest_failure:
+                raise DestinationTerminalException("injected terminal failure")
+            elif recorder.transient_ingest_failures:
                 recorder.transient_ingest_failures -= 1
                 raise ConnectionError("transient flight failure")
             ingest = RecordedIngest(
