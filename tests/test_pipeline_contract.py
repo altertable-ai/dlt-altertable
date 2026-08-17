@@ -5,6 +5,7 @@ from typing import Any
 import dlt
 import pytest
 from altertable_flightsql.client import IngestIncrementalOptions, IngestTableMode
+from dlt.pipeline.exceptions import PipelineStepFailed
 
 from dlt_altertable import CURSOR_HINT, altertable
 from tests.conftest import FlightRecorder
@@ -120,6 +121,49 @@ def test_replace_appends_the_remaining_files_of_one_load(
     assert len(modes) > 1, "expected the load to be split across several parquet files"
     assert modes[0] is IngestTableMode.REPLACE
     assert set(modes[1:]) == {IngestTableMode.APPEND}
+
+
+def test_replace_is_reissued_when_the_first_attempt_fails(
+    recorder: FlightRecorder, run_pipeline
+) -> None:
+    recorder.transient_ingest_failures = 1
+
+    run_pipeline(replaced_deals())
+
+    assert recorder.calls.count("ingest") == 2, "expected dlt to retry the failed load job"
+    assert [ingest.mode for ingest in recorder.ingests_for("deals")] == [IngestTableMode.REPLACE]
+
+
+@dlt.resource(name="by_merge_key", write_disposition="merge", merge_key="id")
+def merged_on_merge_key() -> Iterator[list[dict[str, Any]]]:
+    yield CONTACTS
+
+
+@dlt.resource(
+    name="by_scd2",
+    write_disposition={"disposition": "merge", "strategy": "scd2"},
+    primary_key="id",
+)
+def merged_with_scd2() -> Iterator[list[dict[str, Any]]]:
+    yield CONTACTS
+
+
+@pytest.mark.parametrize(
+    ("resource", "unsupported"),
+    [
+        (merged_on_merge_key, "merge_key"),
+        (merged_with_scd2, "merge strategy 'scd2'"),
+    ],
+    ids=["merge_key", "scd2"],
+)
+def test_unsupported_merge_configurations_fail_the_pipeline(
+    recorder: FlightRecorder, run_pipeline, resource: Any, unsupported: str
+) -> None:
+    with pytest.raises(PipelineStepFailed) as failure:
+        run_pipeline(resource())
+
+    assert unsupported in str(failure.value)
+    assert recorder.ingests == []
 
 
 def test_destination_is_configurable_from_the_environment(

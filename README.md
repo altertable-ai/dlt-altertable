@@ -52,7 +52,11 @@ The pipeline's `dataset_name` is not used. The target schema is the `schema` set
 | --------------------- | ----------------------------------- | ---------------------------------------------------------------- |
 | `append`              | `CREATE_APPEND`                     | Creates the table on first load, appends afterwards.             |
 | `replace`             | `REPLACE`, then `APPEND`            | The first file of each load recreates the table.                 |
-| `merge`               | `CREATE_APPEND` + server-side upsert | Needs a `primary_key`; falls back to a plain append without one. |
+| `merge`               | `CREATE_APPEND` + server-side upsert | Needs a `primary_key`. Other merge configurations are rejected.  |
+
+Only the `upsert` merge strategy is supported. A `merge` resource configured with `merge_key`, with
+the `scd2` strategy, or without a `primary_key` fails the load with a terminal error rather than
+loading under different semantics.
 
 ## Merge cursor
 
@@ -68,6 +72,23 @@ resource.apply_hints(additional_table_hints={CURSOR_HINT: "lastmodifieddate"})
 
 Without the hint the upsert conflicts on the primary key alone, and which row wins is up to the
 server.
+
+## Incremental state on ephemeral runners
+
+A custom destination cannot read back what it already loaded, so incremental cursors live only in
+dlt's own state under `pipelines_dir`. On an ephemeral runner that directory is gone on the next
+run, and every load starts from scratch.
+
+Either persist `pipelines_dir` between runs, or bootstrap the cursor from the destination itself
+before extracting:
+
+```python
+with Client(username, password, host=host, port=port, tls=tls) as client:
+    table = client.query(f'SELECT max(lastmodifieddate) AS cursor FROM "{table_name}"').read_all()
+    since = table.column("cursor")[0].as_py() or 0
+```
+
+`examples/sandboxed_task_hubspot.py` takes the second route.
 
 ## dlt bookkeeping columns
 

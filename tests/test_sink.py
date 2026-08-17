@@ -2,6 +2,7 @@ from typing import Any
 
 import pytest
 from altertable_flightsql.client import IngestIncrementalOptions, IngestTableMode
+from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.schema import TTableSchema
 
 import dlt_altertable.destination
@@ -59,7 +60,6 @@ def rows() -> list[dict[str, Any]]:
     ("write_disposition", "expected_mode"),
     [
         ("append", IngestTableMode.CREATE_APPEND),
-        ("merge", IngestTableMode.CREATE_APPEND),
         ("replace", IngestTableMode.REPLACE),
     ],
 )
@@ -115,6 +115,7 @@ def test_merge_upserts_on_primary_key_with_cursor_hint(
 
     sink(write_parquet(rows), table, **CONNECTION)
 
+    assert recorder.ingests[0].mode is IngestTableMode.CREATE_APPEND
     assert recorder.ingests[0].incremental_options == IngestIncrementalOptions(
         primary_key=["id"], cursor_field=["lastmodifieddate"]
     )
@@ -134,13 +135,14 @@ def test_merge_without_cursor_hint_upserts_on_primary_key_alone(
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_merge_without_primary_key_falls_back_to_plain_append(
+def test_merge_without_primary_key_is_a_terminal_failure(
     recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
-    sink(write_parquet(rows), table_schema("contacts", "merge"), **CONNECTION)
+    with pytest.raises(DestinationTerminalException) as failure:
+        sink(write_parquet(rows), table_schema("contacts", "merge"), **CONNECTION)
 
-    assert recorder.ingests[0].incremental_options is None
-    assert recorder.ingests[0].mode is IngestTableMode.CREATE_APPEND
+    assert "Table contacts: merge without a primary_key" in str(failure.value)
+    assert recorder.ingests == []
 
 
 @pytest.mark.usefixtures("replaced_tables")

@@ -3,9 +3,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from altertable_flightsql import Client
 from altertable_flightsql.client import IngestIncrementalOptions, IngestTableMode
+from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.schema import TTableSchema
 
 CURSOR_HINT = "x-altertable-cursor"
+MERGE_STRATEGY_HINT = "x-merge-strategy"
 
 
 def primary_key_columns(table: TTableSchema) -> list[str]:
@@ -19,13 +21,28 @@ def cursor_columns(table: TTableSchema) -> list[str]:
     return [cursor] if isinstance(cursor, str) else list(cursor)
 
 
+def unsupported_merge_configuration(table: TTableSchema) -> str | None:
+    strategy = table.get(MERGE_STRATEGY_HINT)
+    if strategy not in (None, "upsert"):
+        return f"merge strategy {strategy!r}"
+    if any(column.get("merge_key") for column in table["columns"].values()):
+        return "merge_key"
+    if not primary_key_columns(table):
+        return "merge without a primary_key"
+    return None
+
+
 def incremental_options(table: TTableSchema) -> IngestIncrementalOptions | None:
     if table.get("write_disposition") != "merge":
         return None
-    primary_key = primary_key_columns(table)
-    if not primary_key:
-        return None
-    return IngestIncrementalOptions(primary_key=primary_key, cursor_field=cursor_columns(table))
+    if unsupported := unsupported_merge_configuration(table):
+        raise DestinationTerminalException(
+            f"Table {table['name']}: {unsupported} is not supported by the Altertable destination. "
+            "Merge requires a primary_key and the upsert strategy."
+        )
+    return IngestIncrementalOptions(
+        primary_key=primary_key_columns(table), cursor_field=cursor_columns(table)
+    )
 
 
 def ingest_mode(table: TTableSchema, table_already_replaced: bool) -> IngestTableMode:
@@ -64,8 +81,6 @@ def altertable(
 ) -> None:
     replaced_tables = tables_already_replaced()
     mode = ingest_mode(table, table["name"] in replaced_tables)
-    if mode is IngestTableMode.REPLACE:
-        replaced_tables.append(table["name"])
 
     parquet_file = pq.ParquetFile(parquet_file_path)
     columns = declared_columns(table, parquet_file.schema_arrow)
@@ -86,3 +101,8 @@ def altertable(
     ):
         for batch in parquet_file.iter_batches(columns=columns):
             writer.write(batch)
+
+    # dlt retries a failed job inside the same load package, so a table only counts as replaced
+    # once its transaction has committed.
+    if mode is IngestTableMode.REPLACE:
+        replaced_tables.append(table["name"])

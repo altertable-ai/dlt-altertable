@@ -32,6 +32,7 @@ class FlightRecorder:
     ingests: list[RecordedIngest] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
     parquet_paths: list[str] = field(default_factory=list)
+    transient_ingest_failures: int = 0
 
     def ingests_for(self, table_name: str) -> list[RecordedIngest]:
         return [ingest for ingest in self.ingests if ingest.table_name == table_name]
@@ -87,6 +88,9 @@ def recording_client_class(recorder: FlightRecorder) -> type:
             transaction: RecordingTransaction,
         ) -> RecordingWriter:
             recorder.calls.append("ingest")
+            if recorder.transient_ingest_failures:
+                recorder.transient_ingest_failures -= 1
+                raise ConnectionError("transient flight failure")
             ingest = RecordedIngest(
                 table_name=table_name,
                 schema=schema,
