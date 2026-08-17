@@ -15,12 +15,11 @@
 #   DESTINATION__ALTERTABLE__CATALOG, DESTINATION__ALTERTABLE__SCHEMA,
 #   DESTINATION__ALTERTABLE__USERNAME, DESTINATION__ALTERTABLE__PASSWORD
 
+import os
 import time
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
-
-import os
 
 import dlt
 import pyarrow as pa
@@ -55,7 +54,8 @@ def incremental_options(table: TTableSchema) -> IngestIncrementalOptions | None:
     if strategy not in (None, "upsert") or merge_keys or not primary_key:
         raise DestinationTerminalException(
             f"altertable sink supports merge only as a primary-key upsert; "
-            f"table {table['name']} uses strategy={strategy!r}, merge_key={merge_keys}, primary_key={primary_key}"
+            f"table {table['name']} uses strategy={strategy!r}, "
+            f"merge_key={merge_keys}, primary_key={primary_key}"
         )
     return IngestIncrementalOptions(primary_key=primary_key, cursor_field=cursor_columns(table))
 
@@ -138,7 +138,14 @@ CRM_OBJECTS: dict[str, dict[str, Any]] = {
     },
     "deals": {
         "modified_property": "hs_lastmodifieddate",
-        "properties": ["dealname", "amount", "dealstage", "pipeline", "closedate", "hubspot_owner_id"],
+        "properties": [
+            "dealname",
+            "amount",
+            "dealstage",
+            "pipeline",
+            "closedate",
+            "hubspot_owner_id",
+        ],
     },
 }
 
@@ -152,7 +159,8 @@ def destination_cursor_ms(object_type: str) -> int:
         client.set_catalog(os.environ["DESTINATION__ALTERTABLE__CATALOG"])
         client.set_schema(os.environ["DESTINATION__ALTERTABLE__SCHEMA"])
         try:
-            table = client.query(f'SELECT max(lastmodifieddate) AS cursor FROM "{object_type}"').read_all()
+            query = f'SELECT max(lastmodifieddate) AS cursor FROM "{object_type}"'
+            table = client.query(query).read_all()
         except AltertableNotFoundError:
             return 0
         cursor = table.column("cursor")[0].as_py()
@@ -160,11 +168,20 @@ def destination_cursor_ms(object_type: str) -> int:
 
 
 def search_page(
-    api_key: str, object_type: str, modified_property: str, properties: list[str], since_ms: int, after: str | None
+    api_key: str,
+    object_type: str,
+    modified_property: str,
+    properties: list[str],
+    since_ms: int,
+    after: str | None,
 ) -> dict[str, Any]:
     body = {
         "filterGroups": [
-            {"filters": [{"propertyName": modified_property, "operator": "GT", "value": str(since_ms)}]}
+            {
+                "filters": [
+                    {"propertyName": modified_property, "operator": "GT", "value": str(since_ms)}
+                ]
+            }
         ],
         "sorts": [{"propertyName": modified_property, "direction": "ASCENDING"}],
         "properties": properties + [modified_property],
@@ -192,13 +209,17 @@ def crm_object_resource(object_type: str, api_key: str) -> Any:
 
     @dlt.resource(name=object_type, write_disposition="merge", primary_key="id")
     def rows(
-        modified_at: dlt.sources.incremental[int] = dlt.sources.incremental("lastmodifieddate", initial_value=0),
+        modified_at: dlt.sources.incremental[int] = dlt.sources.incremental(  # noqa: B008
+            "lastmodifieddate", initial_value=0
+        ),
     ) -> Iterator[dict[str, Any]]:
         since_ms = max(modified_at.last_value or 0, destination_cursor_ms(object_type))
         after: str | None = None
         yielded_in_window = 0
         while True:
-            page = search_page(api_key, object_type, modified_property, spec["properties"], since_ms, after)
+            page = search_page(
+                api_key, object_type, modified_property, spec["properties"], since_ms, after
+            )
             for result in page["results"]:
                 row = {"id": result["id"], **result["properties"]}
                 row["lastmodifieddate"] = epoch_ms(result["properties"][modified_property])
