@@ -3,16 +3,22 @@ name = "dlt-altertable"
 version = "0.1.0"
 description = "dlt destination that loads into the Altertable lakehouse over Arrow Flight SQL"
 readme = "README.md"
-authors = [{ name = "Florian Valeye", email = "florian.valeye@gmail.com" }]
+authors = [{ name = "Altertable", email = "hello@altertable.ai" }]
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 keywords = ["dlt", "altertable", "lakehouse", "arrow", "flight-sql"]
 requires-python = ">=3.12"
+
 dependencies = [
     "altertable-flightsql>=0.3.2",
     "dlt[parquet]~=1.19",
     "pyarrow>=15.0.0",
 ]
+
+[project.urls]
+Homepage = "https://altertable.ai"
+Repository = "https://github.com/altertable-ai/dlt-altertable"
+Changelog = "https://github.com/altertable-ai/dlt-altertable/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = ["pytest~=8.4", "ruff~=0.14"]
