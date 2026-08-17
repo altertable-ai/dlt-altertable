@@ -7,7 +7,7 @@ import pytest
 from altertable_flightsql.client import IngestIncrementalOptions, IngestTableMode
 from dlt.pipeline.exceptions import PipelineStepFailed
 
-from dlt_altertable import CURSOR_HINT, altertable
+from dlt_altertable import altertable
 from tests.conftest import FlightRecorder
 
 CONTACTS = [
@@ -24,7 +24,7 @@ def run_pipeline(tmp_path: Path):
             destination=altertable(
                 host="flight.test",
                 catalog="lakehouse",
-                schema="raw",
+                dataset_name="raw",
                 username="user",
                 password="secret",
                 port=15002,
@@ -58,7 +58,7 @@ def test_merge_resource_becomes_a_server_side_upsert(
     recorder: FlightRecorder, run_pipeline
 ) -> None:
     resource = merging_contacts()
-    resource.apply_hints(additional_table_hints={CURSOR_HINT: "lastmodifieddate"})
+    resource.apply_hints(columns={"lastmodifieddate": {"dedup_sort": "desc"}})
 
     run_pipeline(resource)
 
@@ -171,7 +171,7 @@ def test_destination_is_configurable_from_the_environment(
 ) -> None:
     monkeypatch.setenv("DESTINATION__ALTERTABLE__HOST", "flight.from-env")
     monkeypatch.setenv("DESTINATION__ALTERTABLE__CATALOG", "env_catalog")
-    monkeypatch.setenv("DESTINATION__ALTERTABLE__SCHEMA", "env_schema")
+    monkeypatch.setenv("DESTINATION__ALTERTABLE__DATASET_NAME", "env_schema")
     monkeypatch.setenv("DESTINATION__ALTERTABLE__PORT", "15002")
     monkeypatch.setenv("DESTINATION__ALTERTABLE__TLS", "false")
     monkeypatch.setenv("DESTINATION__ALTERTABLE__USERNAME", "env_user")

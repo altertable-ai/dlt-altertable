@@ -7,6 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from altertable_flightsql.client import IngestIncrementalOptions, IngestTableMode
+from pyarrow.flight import FlightUnauthenticatedError
 
 import dlt_altertable.destination
 
@@ -32,7 +33,11 @@ class FlightRecorder:
     ingests: list[RecordedIngest] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
     parquet_paths: list[str] = field(default_factory=list)
+    queries: list[str] = field(default_factory=list)
+    statements: list[str] = field(default_factory=list)
+    existing_columns: list[str] = field(default_factory=list)
     transient_ingest_failures: int = 0
+    unauthenticated: bool = False
 
     def ingests_for(self, table_name: str) -> list[RecordedIngest]:
         return [ingest for ingest in self.ingests if ingest.table_name == table_name]
@@ -56,6 +61,14 @@ class RecordingWriter:
         self.close()
 
 
+class RecordingReader:
+    def __init__(self, table: pa.Table) -> None:
+        self._table = table
+
+    def read_all(self) -> pa.Table:
+        return self._table
+
+
 class RecordingTransaction:
     def __init__(self, recorder: FlightRecorder) -> None:
         self._recorder = recorder
@@ -72,7 +85,21 @@ def recording_client_class(recorder: FlightRecorder) -> type:
         def __init__(self, username: str, password: str, **connection: Any) -> None:
             recorder.connections.append({"username": username, "password": password, **connection})
 
+        def query(self, sql: str, **_: Any) -> RecordingReader:
+            if recorder.unauthenticated:
+                raise FlightUnauthenticatedError("Authorization header must use Bearer scheme")
+            recorder.queries.append(sql)
+            return RecordingReader(
+                pa.table({"column_name": pa.array(recorder.existing_columns, type=pa.string())})
+            )
+
+        def execute(self, sql: str, **_: Any) -> int:
+            recorder.statements.append(sql)
+            return 0
+
         def begin_transaction(self) -> RecordingTransaction:
+            if recorder.unauthenticated:
+                raise FlightUnauthenticatedError("Authorization header must use Bearer scheme")
             recorder.calls.append("begin_transaction")
             return RecordingTransaction(recorder)
 
@@ -112,6 +139,12 @@ def recording_client_class(recorder: FlightRecorder) -> type:
             self.close()
 
     return RecordingClient
+
+
+@pytest.fixture(autouse=True)
+def isolated_altertable_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for suffix in ("HOST", "PORT", "TLS", "USERNAME", "PASSWORD", "CATALOG", "SCHEMA"):
+        monkeypatch.delenv(f"ALTERTABLE_{suffix}", raising=False)
 
 
 @pytest.fixture

@@ -4,9 +4,10 @@ import pytest
 from altertable_flightsql.client import IngestIncrementalOptions, IngestTableMode
 from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.schema import TTableSchema
+from pyarrow.flight import FlightInternalError
 
 import dlt_altertable.destination
-from dlt_altertable import CURSOR_HINT, altertable
+from dlt_altertable import altertable
 from tests.conftest import FlightRecorder
 
 sink = altertable.__wrapped__
@@ -14,11 +15,21 @@ sink = altertable.__wrapped__
 CONNECTION = {
     "host": "flight.test",
     "catalog": "lakehouse",
-    "schema": "raw",
+    "dataset_name": "raw",
     "username": "user",
     "password": "secret",
     "port": 15002,
     "tls": False,
+}
+
+SANDBOX_ENVIRONMENT = {
+    "ALTERTABLE_HOST": "flight.sandbox",
+    "ALTERTABLE_CATALOG": "lakehouse",
+    "ALTERTABLE_SCHEMA": "crm",
+    "ALTERTABLE_USERNAME": "sandbox",
+    "ALTERTABLE_PASSWORD": "sandbox-secret",
+    "ALTERTABLE_PORT": "15002",
+    "ALTERTABLE_TLS": "false",
 }
 
 
@@ -37,6 +48,11 @@ def table_schema(name: str, write_disposition: str, **hints: Any) -> TTableSchem
 def with_primary_key(table: TTableSchema, *columns: str) -> TTableSchema:
     for column in columns:
         table["columns"][column]["primary_key"] = True
+    return table
+
+
+def with_dedup_sort(table: TTableSchema, column: str, order: str = "desc") -> TTableSchema:
+    table["columns"][column]["dedup_sort"] = order
     return table
 
 
@@ -106,11 +122,11 @@ def test_replace_bookkeeping_is_per_table(
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_merge_upserts_on_primary_key_with_cursor_hint(
+def test_merge_with_dedup_sort_becomes_the_server_cursor(
     recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
-    table = with_primary_key(
-        table_schema("contacts", "merge", **{CURSOR_HINT: "lastmodifieddate"}), "id"
+    table = with_dedup_sort(
+        with_primary_key(table_schema("contacts", "merge"), "id"), "lastmodifieddate"
     )
 
     sink(write_parquet(rows), table, **CONNECTION)
@@ -122,40 +138,144 @@ def test_merge_upserts_on_primary_key_with_cursor_hint(
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_merge_without_cursor_hint_upserts_on_primary_key_alone(
+def test_merge_without_dedup_sort_upserts_on_primary_key_alone(
     recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
-    table = with_primary_key(table_schema("contacts", "merge"), "id", "lastmodifieddate")
+    table = with_primary_key(table_schema("contacts", "merge"), "id")
 
     sink(write_parquet(rows), table, **CONNECTION)
 
     assert recorder.ingests[0].incremental_options == IngestIncrementalOptions(
-        primary_key=["id", "lastmodifieddate"], cursor_field=[]
+        primary_key=["id"], cursor_field=[]
     )
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_merge_without_primary_key_is_a_terminal_failure(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+@pytest.mark.parametrize(
+    ("table", "unsupported"),
+    [
+        (table_schema("contacts", "merge"), "merge without a primary_key"),
+        (
+            with_primary_key(table_schema("links", "merge"), "id", "lastmodifieddate"),
+            "merge with primary-key columns only",
+        ),
+        (
+            with_dedup_sort(
+                with_primary_key(table_schema("contacts", "merge"), "id"),
+                "lastmodifieddate",
+                order="asc",
+            ),
+            "dedup_sort 'asc'",
+        ),
+    ],
+    ids=["no_primary_key", "primary_key_only_columns", "ascending_dedup_sort"],
+)
+def test_unsupported_merge_configurations_are_terminal(
+    recorder: FlightRecorder,
+    write_parquet,
+    rows: list[dict[str, Any]],
+    table: TTableSchema,
+    unsupported: str,
 ) -> None:
     with pytest.raises(DestinationTerminalException) as failure:
-        sink(write_parquet(rows), table_schema("contacts", "merge"), **CONNECTION)
+        sink(write_parquet(rows), table, **CONNECTION)
 
-    assert "Table contacts: merge without a primary_key" in str(failure.value)
+    assert f"Table {table['name']}: {unsupported}" in str(failure.value)
     assert recorder.ingests == []
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_append_ignores_primary_key_and_cursor_hints(
+def test_merge_with_hard_delete_hint_is_terminal(
     recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
-    table = with_primary_key(
-        table_schema("contacts", "append", **{CURSOR_HINT: "lastmodifieddate"}), "id"
+    table = with_primary_key(table_schema("contacts", "merge"), "id")
+    table["columns"]["deleted"] = {"name": "deleted", "data_type": "bool", "hard_delete": True}
+
+    with pytest.raises(DestinationTerminalException) as failure:
+        sink(write_parquet(rows), table, **CONNECTION)
+
+    assert "hard_delete" in str(failure.value)
+    assert recorder.ingests == []
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_append_ignores_primary_key_and_dedup_sort_hints(
+    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    table = with_dedup_sort(
+        with_primary_key(table_schema("contacts", "append"), "id"), "lastmodifieddate"
     )
 
     sink(write_parquet(rows), table, **CONNECTION)
 
     assert recorder.ingests[0].incremental_options is None
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_schema_evolution_adds_new_columns_before_ingest(
+    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    recorder.existing_columns = ["id"]
+
+    sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
+
+    assert recorder.statements == [
+        'ALTER TABLE "lakehouse"."raw"."contacts" '
+        'ADD COLUMN IF NOT EXISTS "lastmodifieddate" BIGINT'
+    ]
+    assert recorder.ingests[0].rows == rows
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_new_tables_skip_schema_evolution(
+    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
+
+    assert len(recorder.queries) == 1
+    assert recorder.statements == []
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_replace_skips_the_column_lookup(
+    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    sink(write_parquet(rows), table_schema("contacts", "replace"), **CONNECTION)
+
+    assert recorder.queries == []
+    assert recorder.statements == []
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_wrong_credentials_fail_terminally_naming_the_endpoint(
+    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    recorder.unauthenticated = True
+
+    with pytest.raises(DestinationTerminalException) as failure:
+        sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
+
+    assert "flight.test:15002" in str(failure.value)
+    assert "'user'" in str(failure.value)
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_flight_errors_name_the_load_target(
+    recorder: FlightRecorder,
+    write_parquet,
+    rows: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failing_ingest(self: Any, **_: Any) -> None:
+        raise FlightInternalError("Failed to create table")
+
+    monkeypatch.setattr(dlt_altertable.destination.Client, "ingest", failing_ingest)
+
+    with pytest.raises(RuntimeError) as failure:
+        sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
+
+    assert "lakehouse.raw.contacts" in str(failure.value)
+    assert "flight.test:15002" in str(failure.value)
 
 
 @pytest.mark.usefixtures("replaced_tables")
@@ -209,3 +329,41 @@ def test_connection_parameters_reach_the_client(
             "tls": False,
         }
     ]
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_connection_falls_back_to_the_sandbox_environment(
+    recorder: FlightRecorder,
+    write_parquet,
+    rows: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for variable, value in SANDBOX_ENVIRONMENT.items():
+        monkeypatch.setenv(variable, value)
+
+    sink(write_parquet(rows), table_schema("contacts", "append"))
+
+    assert recorder.connections == [
+        {
+            "username": "sandbox",
+            "password": "sandbox-secret",
+            "host": "flight.sandbox",
+            "port": 15002,
+            "tls": False,
+        }
+    ]
+    assert recorder.ingests[0].catalog_name == "lakehouse"
+    assert recorder.ingests[0].schema_name == "crm"
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_missing_configuration_is_terminal_and_names_every_surface(
+    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    with pytest.raises(DestinationTerminalException) as failure:
+        sink(write_parquet(rows), table_schema("contacts", "append"))
+
+    assert "host is not configured" in str(failure.value)
+    assert "destination.altertable.host" in str(failure.value)
+    assert "ALTERTABLE_HOST" in str(failure.value)
+    assert recorder.connections == []
