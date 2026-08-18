@@ -94,21 +94,13 @@ def altertable(
             already_evolved.append(table["name"])
 
     params = {"catalog": config.catalog, "schema": config.dataset_name, "table": table["name"]}
+    action = f"loading {config.catalog}.{config.dataset_name}.{table['name']}"
     if upsert is not None:
-        endpoint = "upsert"
-        params |= upsert
+        post_parquet(config, "upsert", params | upsert, parquet_file_path, action)
     else:
-        endpoint = "upload"
         params["mode"] = mode
-
-    with aligned_parquet(parquet_file_path, table) as upload_path:
-        post_parquet(
-            config,
-            endpoint,
-            params,
-            upload_path,
-            f"loading {config.catalog}.{config.dataset_name}.{table['name']}",
-        )
+        with aligned_parquet(parquet_file_path, table) as upload_path:
+            post_parquet(config, "upload", params, upload_path, action)
 
     if mode == "overwrite":
         already_replaced.append(table["name"])

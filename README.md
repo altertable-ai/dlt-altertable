@@ -7,9 +7,9 @@
 
 A [dlt](https://dlthub.com) destination that loads into the [Altertable](https://altertable.ai)
 lakehouse through the HTTP Lakehouse API. Each dlt load job is one parquet file, posted verbatim
-to `/upload` or `/upsert` whenever the file matches the target schema. A file written before dlt
-evolved the load's schema is padded with typed `NULL` columns first, so every post matches the
-table column for column.
+to `/upload` or `/upsert`. An append or replace file written before dlt evolved the load's schema
+is padded with typed `NULL` columns first, because those uploads must match the table column for
+column. Merge files always post as they are, so columns a file omits keep their stored values.
 
 ## Install
 
