@@ -249,8 +249,8 @@ def merge_table() -> TTableSchema:
 def test_a_missing_table_is_created_before_the_load(
     server: FakeServer, write_parquet, rows: list[dict[str, Any]], build_table
 ) -> None:
-    """The server fails an append on a missing table and runs an upsert as a MERGE, so neither
-    disposition can rely on the load itself to create it."""
+    """Creating the table from dlt's typed schema keeps column types deliberate for every
+    disposition, instead of leaving the table shape to inference on first contact."""
     sink(write_parquet(rows), build_table(), config=make_config())
 
     assert server.creates == [

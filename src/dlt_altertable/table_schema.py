@@ -74,8 +74,9 @@ def create_table(config: AltertableClientConfiguration, table: TTableSchema) -> 
 
 
 def create_or_evolve_table(config: AltertableClientConfiguration, table: TTableSchema) -> bool:
-    """Neither append nor upsert creates its target, so the destination owns creation. A table
-    left by an earlier load must also gain the columns that dlt's schema evolution added since.
+    """Creating the table from dlt's typed schema keeps column types and later evolution
+    deliberate instead of whatever the server would infer from the first file. A table left by
+    an earlier load must also gain the columns that dlt's schema evolution added since.
 
     Returns whether the lookup found an existing table, the only answer worth caching for the
     rest of the load: a CREATE is never read back to confirm what the table now holds."""
@@ -119,10 +120,7 @@ def aligned_parquet(parquet_file_path: str, table: TTableSchema) -> Iterator[str
         NamingConvention(),
         DestinationCapabilitiesContext.generic_capabilities(),
     )
-    handle, aligned_path = tempfile.mkstemp(suffix=".parquet")
-    os.close(handle)
-    pq.write_table(aligned, aligned_path)
-    try:
+    with tempfile.TemporaryDirectory() as aligned_dir:
+        aligned_path = os.path.join(aligned_dir, "aligned.parquet")
+        pq.write_table(aligned, aligned_path)
         yield aligned_path
-    finally:
-        os.unlink(aligned_path)
