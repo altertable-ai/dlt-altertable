@@ -132,10 +132,13 @@ a `replace` load recreates the table.
 Failures map onto dlt's retry contract: errors a retry cannot fix, such as bad credentials or
 an invalid request, fail the job immediately with a terminal error, while server errors,
 capacity timeouts and connection failures are retried by dlt until the fifth attempt fails
-(`load.raise_on_max_retries`). The upload read timeout is one hour, because the server answers
-only once the file is fully ingested. Do not lower it: a request aborted client side can still
-complete on the server, which turns dlt's retry into duplicate appended rows. `merge` tables
-are idempotent under retry, `append` is at least once.
+(`load.raise_on_max_retries`). Errors streamed mid-response by `/query` retry as well, which
+is safe because every statement the destination issues is `IF NOT EXISTS`-idempotent. The upload
+read timeout is one hour, because the server answers only once the file is fully ingested. Do
+not lower it: a request aborted client side can still complete on the server, which turns dlt's
+retry into duplicate appended rows. `merge` tables are idempotent under retry, `append` is at
+least once, and `replace` is at least once after its first file, since only the first file of
+the load recreates the table and a retried later file appends twice.
 
 The destination declares `loader_parallelism_strategy="table-sequential"`, and the `replace`
 bookkeeping depends on it. Do not override it with `LOAD__PARALLELISM_STRATEGY=parallel`: two
@@ -160,23 +163,29 @@ import requests
 
 response = requests.post(
     "https://api.altertable.ai/query",
-    json={"statement": f'SELECT count(*) AS n, max(lastmodifieddate) AS m FROM "{table_name}"'},
+    json={"statement": f'SELECT max(lastmodifieddate) FROM "{catalog}"."{schema}"."{table_name}"'},
     auth=(username, password),
     timeout=(10, 300),
 )
-count, since = [json.loads(line) for line in response.text.splitlines()][2]
+response.raise_for_status()
+rows = [json.loads(line) for line in response.text.splitlines()]
+if any(isinstance(row, dict) and "error" in row for row in rows):
+    raise RuntimeError(rows)
+since = rows[2][0]
 ```
 
 The response streams one JSON line per row after two metadata lines, so the first row sits at
-index 2. Check the row count: a legitimately empty table gives `count = 0`, while a `NULL`
-count means the query failed mid-stream and the read should be retried.
+index 2. A failed query arrives as an `{"error": ...}` line inside the stream, not as a special
+row, so check for it before trusting the value. An empty table gives a `NULL` max, which simply
+means start from the beginning.
 
 ## Develop
 
 ```bash
-uv sync
-uv run pytest
-uv run ruff check .
+uv run --locked pytest
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uvx ty check src
 ```
 
 The test suite mocks the HTTP API and needs no server. For a live check, run
