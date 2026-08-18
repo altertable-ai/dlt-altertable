@@ -10,7 +10,7 @@ from dlt_altertable.configuration import AltertableClientConfiguration
 
 UPLOAD_TIMEOUT = (30, 3600)
 QUERY_TIMEOUT = (10, 300)
-UPLOAD_BLOCK_BYTES = 1 << 20
+UPLOAD_WRITE_BLOCK_BYTES = 1 << 20
 LOADER_WORKERS = 20
 TERMINAL_STATUSES = {
     HTTPStatus.BAD_REQUEST,
@@ -27,7 +27,7 @@ class LargeBlockAdapter(HTTPAdapter):
     sized for ordinary requests, not for a file-sized body."""
 
     def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
-        kwargs["blocksize"] = UPLOAD_BLOCK_BYTES
+        kwargs["blocksize"] = UPLOAD_WRITE_BLOCK_BYTES
         super().init_poolmanager(*args, **kwargs)
 
 
