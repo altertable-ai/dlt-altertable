@@ -59,6 +59,7 @@ class FakeServer:
     uploads: list[RecordedRequest] = field(default_factory=list)
     attempted_tables: list[str] = field(default_factory=list)
     statements: list[str] = field(default_factory=list)
+    query_payloads: list[dict[str, Any]] = field(default_factory=list)
     existing_columns: list[str] = field(default_factory=list)
     successes_before_failures: int = 0
     transient_upload_failures: int = 0
@@ -100,6 +101,7 @@ class FakeServer:
         if url.endswith("/query"):
             statement = json["statement"]
             self.statements.append(statement)
+            self.query_payloads.append(dict(json))
             if self.query_error is not None:
                 lines: list[Any] = [{}, [], {"error": self.query_error}]
             elif statement.startswith(("ALTER", "CREATE")):

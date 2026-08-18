@@ -52,7 +52,7 @@ catalog = "lakehouse"
 dataset_name = "crm"
 username = "..."
 password = "..."
-# port = 443 and tls = true are the defaults
+# port = 443, tls = true and compute_size = "XS" (for schema queries) are the defaults
 ```
 
 Every setting can also come from dlt's environment variables, which override the toml file

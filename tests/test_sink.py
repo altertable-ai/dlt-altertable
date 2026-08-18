@@ -212,6 +212,19 @@ def test_append_ignores_primary_key_and_dedup_sort_hints(
 
 
 @pytest.mark.usefixtures("replaced_tables")
+def test_compute_size_reaches_every_query(
+    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    assert make_config().compute_size == "XS"
+
+    config = make_config(compute_size="M")
+
+    sink(write_parquet(rows), table_schema("contacts", "append"), config=config)
+
+    assert {payload["compute_size"] for payload in server.query_payloads} == {"M"}
+
+
+@pytest.mark.usefixtures("replaced_tables")
 def test_schema_evolution_adds_new_columns_before_the_upload(
     server: FakeServer, write_parquet, rows: list[dict[str, Any]]
 ) -> None:

@@ -49,7 +49,7 @@ def raise_for_failure(response: requests.Response, action: str) -> None:
 def execute_sql(config: AltertableClientConfiguration, statement: str) -> list[list]:
     response = session.post(
         f"{config.base_url}/query",
-        json={"statement": statement, "ephemeral": True, "compute_size": "XS"},
+        json={"statement": statement, "ephemeral": True, "compute_size": config.compute_size},
         auth=config.basic_auth,
         timeout=QUERY_TIMEOUT,
     )

@@ -26,6 +26,7 @@ class AltertableClientConfiguration(CustomDestinationClientConfiguration):
     password: TSecretStrValue | None = None
     port: int | None = None
     tls: bool | None = None
+    compute_size: str | None = None
 
     def on_resolved(self) -> None:
         for parameter, env_var in ENV_FALLBACKS.items():
@@ -41,6 +42,8 @@ class AltertableClientConfiguration(CustomDestinationClientConfiguration):
             self.port = int(os.environ.get("ALTERTABLE_PORT", "443"))
         if self.tls is None:
             self.tls = os.environ.get("ALTERTABLE_TLS", "true").lower() != "false"
+        if self.compute_size is None:
+            self.compute_size = os.environ.get("ALTERTABLE_COMPUTE_SIZE", "XS")
 
     @property
     def base_url(self) -> str:
