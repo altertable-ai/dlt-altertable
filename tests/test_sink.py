@@ -336,6 +336,32 @@ def test_narrower_files_are_padded_to_the_table_schema(
 
 
 @pytest.mark.usefixtures("replaced_tables")
+def test_narrower_merge_files_are_posted_without_padding(
+    server: FakeServer, write_parquet
+) -> None:
+    table = with_primary_key(table_schema("contacts", "merge"), "id")
+    narrow_file = write_parquet([{"id": 1}])
+
+    sink(narrow_file, table, config=make_config())
+
+    upload = server.uploads[0]
+    assert upload.schema.names == ["id"]
+    assert upload.rows == [{"id": 1}]
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_wei_columns_are_terminal(server: FakeServer, write_parquet) -> None:
+    table = table_schema("transfers", "append")
+    table["columns"]["value"] = {"name": "value", "data_type": "wei"}
+
+    with pytest.raises(DestinationTerminalException) as failure:
+        sink(write_parquet([{"id": 1}]), table, config=make_config())
+
+    assert "wei" in str(failure.value)
+    assert server.uploads == []
+
+
+@pytest.mark.usefixtures("replaced_tables")
 def test_comma_in_key_columns_is_terminal(
     server: FakeServer, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
