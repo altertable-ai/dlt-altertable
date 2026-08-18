@@ -1,10 +1,8 @@
+import json
 import os
 
 import dlt
-import pyarrow as pa
-import pyarrow.parquet as pq
-from altertable_flightsql import Client
-from altertable_flightsql.client import IngestIncrementalOptions, IngestTableMode
+import requests
 from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.schema import TTableSchema
 from dlt.common.schema.typing import TColumnSchema
@@ -13,7 +11,6 @@ from dlt.common.schema.utils import (
     get_dedup_sort_tuple,
     has_column_with_prop,
 )
-from pyarrow.flight import FlightError, FlightUnauthenticatedError
 
 MERGE_STRATEGY_HINT = "x-merge-strategy"
 
@@ -30,6 +27,10 @@ SQL_TYPES = {
     "decimal": "DECIMAL(38,9)",
     "wei": "DECIMAL(38,0)",
 }
+
+UPLOAD_TIMEOUT = (30, 3600)
+QUERY_TIMEOUT = (10, 300)
+TERMINAL_STATUSES = {400, 401, 402, 403, 404, 405}
 
 
 def configured(value: str | None, parameter: str, env_var: str) -> str:
@@ -61,15 +62,12 @@ def unsupported_merge_configuration(table: TTableSchema) -> str | None:
     dedup_sort = get_dedup_sort_tuple(table)
     if dedup_sort and dedup_sort[1] != "desc":
         return f"dedup_sort {dedup_sort[1]!r} (the server keeps the highest value, use 'desc')"
-    primary_key = primary_key_columns(table)
-    if not primary_key:
+    if not primary_key_columns(table):
         return "merge without a primary_key"
-    if all(name in primary_key for name in table["columns"]):
-        return "merge with primary-key columns only"
     return None
 
 
-def incremental_options(table: TTableSchema) -> IngestIncrementalOptions | None:
+def merge_params(table: TTableSchema) -> dict[str, str] | None:
     if table.get("write_disposition") != "merge":
         return None
     if unsupported := unsupported_merge_configuration(table):
@@ -77,15 +75,16 @@ def incremental_options(table: TTableSchema) -> IngestIncrementalOptions | None:
             f"Table {table['name']}: {unsupported} is not supported by the Altertable "
             "destination, which runs merge as a server-side upsert on the primary_key."
         )
-    return IngestIncrementalOptions(
-        primary_key=primary_key_columns(table), cursor_field=cursor_columns(table)
-    )
+    params = {"primary_key": ",".join(primary_key_columns(table))}
+    if cursor := cursor_columns(table):
+        params["cursor_field"] = ",".join(cursor)
+    return params
 
 
-def ingest_mode(table: TTableSchema, table_already_replaced: bool) -> IngestTableMode:
+def upload_mode(table: TTableSchema, table_already_replaced: bool) -> str:
     if table.get("write_disposition") != "replace":
-        return IngestTableMode.CREATE_APPEND
-    return IngestTableMode.APPEND if table_already_replaced else IngestTableMode.REPLACE
+        return "create_append"
+    return "append" if table_already_replaced else "overwrite"
 
 
 def tables_already_replaced() -> list[str]:
@@ -96,10 +95,28 @@ def tables_already_evolved() -> list[str]:
     return dlt.current.destination_state().setdefault("evolved_tables", [])
 
 
-def declared_columns(table: TTableSchema, parquet_schema: pa.Schema) -> list[str]:
-    """dlt writes _dlt_id and _dlt_load_id into the parquet file even when it hides them from the
-    table schema, so the file is the wrong source of truth for what belongs in the lakehouse."""
-    return [name for name in parquet_schema.names if name in table["columns"]]
+def raise_for_failure(response: requests.Response, action: str) -> None:
+    if response.status_code == 200:
+        return
+    detail = f"{action} failed with HTTP {response.status_code}: {response.text.strip()}"
+    if response.status_code in TERMINAL_STATUSES:
+        raise DestinationTerminalException(detail)
+    raise RuntimeError(detail)
+
+
+def execute_sql(base_url: str, auth: tuple[str, str], statement: str) -> list[list]:
+    response = requests.post(
+        f"{base_url}/query",
+        json={"statement": statement, "ephemeral": True, "compute_size": "XS"},
+        auth=auth,
+        timeout=QUERY_TIMEOUT,
+    )
+    raise_for_failure(response, f"query {statement!r}")
+    payload = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+    for entry in payload:
+        if isinstance(entry, dict) and "error" in entry:
+            raise RuntimeError(f"query {statement!r} failed mid-stream: {entry['error']}")
+    return payload[2:]
 
 
 def sql_type(column: TColumnSchema) -> str:
@@ -110,30 +127,28 @@ def sql_type(column: TColumnSchema) -> str:
     return SQL_TYPES[column["data_type"]]
 
 
-def existing_column_names(
-    client: Client, catalog: str, dataset_name: str, table_name: str
-) -> set[str]:
-    result = client.query(
-        "SELECT column_name FROM information_schema.columns "
-        f"WHERE table_catalog = '{catalog}' AND table_schema = '{dataset_name}' "
-        f"AND table_name = '{table_name}'"
-    ).read_all()
-    return {column.as_py() for column in result.column("column_name")}
-
-
 def add_new_columns(
-    client: Client, catalog: str, dataset_name: str, table: TTableSchema, column_names: list[str]
+    base_url: str, auth: tuple[str, str], catalog: str, dataset_name: str, table: TTableSchema
 ) -> None:
     """The server appends by exact column match, so a table created by an earlier load must first
     gain the columns that dlt's schema evolution added since."""
-    existing = existing_column_names(client, catalog, dataset_name, table["name"])
+    rows = execute_sql(
+        base_url,
+        auth,
+        "SELECT column_name FROM information_schema.columns "
+        f"WHERE table_catalog = '{catalog}' AND table_schema = '{dataset_name}' "
+        f"AND table_name = '{table['name']}'",
+    )
+    existing = {row[0] for row in rows}
     if not existing:
         return
-    for name in column_names:
+    for name, column in table["columns"].items():
         if name not in existing:
-            client.execute(
+            execute_sql(
+                base_url,
+                auth,
                 f'ALTER TABLE "{catalog}"."{dataset_name}"."{table["name"]}" '
-                f'ADD COLUMN IF NOT EXISTS "{name}" {sql_type(table["columns"][name])}'
+                f'ADD COLUMN IF NOT EXISTS "{name}" {sql_type(column)}',
             )
 
 
@@ -142,7 +157,7 @@ def add_new_columns(
     naming_convention="direct",
     loader_file_format="parquet",
     batch_size=0,
-    skip_dlt_columns_and_tables=True,
+    skip_dlt_columns_and_tables=False,
     max_table_nesting=0,
     loader_parallelism_strategy="table-sequential",
 )
@@ -165,40 +180,36 @@ def altertable(
     port = int(port) if port is not None else int(os.environ.get("ALTERTABLE_PORT", "443"))
     tls = tls if tls is not None else os.environ.get("ALTERTABLE_TLS", "true").lower() != "false"
 
-    options = incremental_options(table)
+    base_url = f"{'https' if tls else 'http'}://{host}:{port}"
+    auth = (username, password)
+    upsert_params = merge_params(table)
+
     replaced_tables = tables_already_replaced()
     evolved_tables = tables_already_evolved()
-    mode = ingest_mode(table, table["name"] in replaced_tables)
+    mode = upload_mode(table, table["name"] in replaced_tables)
 
-    try:
-        with (
-            pq.ParquetFile(parquet_file_path) as parquet_file,
-            Client(username, password, host=host, port=port, tls=tls) as client,
-        ):
-            columns = declared_columns(table, parquet_file.schema_arrow)
-            arrow_schema = pa.schema([parquet_file.schema_arrow.field(name) for name in columns])
-            if mode is IngestTableMode.CREATE_APPEND and table["name"] not in evolved_tables:
-                add_new_columns(client, catalog, dataset_name, table, columns)
-                evolved_tables.append(table["name"])
-            with client.ingest(
-                table_name=table["name"],
-                schema=arrow_schema,
-                schema_name=dataset_name,
-                catalog_name=catalog,
-                mode=mode,
-                incremental_options=options,
-            ) as writer:
-                for batch in parquet_file.iter_batches(columns=columns):
-                    writer.write(batch)
-    except FlightUnauthenticatedError as error:
-        raise DestinationTerminalException(
-            f"Authentication to {host}:{port} failed for user {username!r}: {error}"
-        ) from error
-    except FlightError as error:
-        raise RuntimeError(
-            f"Loading {catalog}.{dataset_name}.{table['name']} through {host}:{port} "
-            f"failed: {error}"
-        ) from error
+    if mode != "overwrite" and table["name"] not in evolved_tables:
+        add_new_columns(base_url, auth, catalog, dataset_name, table)
+        evolved_tables.append(table["name"])
 
-    if mode is IngestTableMode.REPLACE:
+    params = {"catalog": catalog, "schema": dataset_name, "table": table["name"]}
+    if upsert_params is not None:
+        endpoint = "upsert"
+        params |= upsert_params
+    else:
+        endpoint = "upload"
+        params["mode"] = mode
+
+    with open(parquet_file_path, "rb") as parquet_file:
+        response = requests.post(
+            f"{base_url}/{endpoint}",
+            params=params,
+            data=parquet_file,
+            auth=auth,
+            headers={"Content-Type": "application/parquet"},
+            timeout=UPLOAD_TIMEOUT,
+        )
+    raise_for_failure(response, f"loading {catalog}.{dataset_name}.{table['name']}")
+
+    if mode == "overwrite":
         replaced_tables.append(table["name"])

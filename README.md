@@ -6,9 +6,9 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 A [dlt](https://dlthub.com) destination that loads into the [Altertable](https://altertable.ai)
-lakehouse over Arrow Flight SQL. Each dlt load job is one parquet file, streamed as Arrow record
-batches through a single ingest statement. Types pass through Arrow end to end: the parquet file
-dlt writes is the schema the server sees.
+lakehouse through the HTTP Lakehouse API. Each dlt load job is one parquet file, posted verbatim
+to `/upload` or `/upsert`. Types pass through untouched: the parquet file dlt writes is exactly
+what the server ingests.
 
 ## Install
 
@@ -16,7 +16,7 @@ dlt writes is the schema the server sees.
 uv add dlt-altertable
 ```
 
-Supported: Python 3.12 to 3.14, `dlt >= 1.19`, `altertable-flightsql >= 0.3.2`.
+Supported: Python 3.12 to 3.14, `dlt >= 1.19`. The only other dependency is `requests`.
 
 ## Use
 
@@ -46,7 +46,7 @@ Configure the connection in `.dlt/secrets.toml`:
 
 ```toml
 [destination.altertable]
-host = "flight.altertable.ai"
+host = "api.altertable.ai"
 catalog = "lakehouse"
 dataset_name = "crm"
 username = "..."
@@ -61,7 +61,7 @@ directly: `altertable(host=..., catalog=..., dataset_name=...)`.
 Inside an Altertable sandbox no configuration is needed at all: the destination picks up the
 `ALTERTABLE_HOST`, `ALTERTABLE_PORT`, `ALTERTABLE_TLS`, `ALTERTABLE_USERNAME`,
 `ALTERTABLE_PASSWORD`, `ALTERTABLE_CATALOG` and `ALTERTABLE_SCHEMA` variables the sandbox
-already provides.
+already provides. The host must be the HTTP API host (`api.…`), not the Flight endpoint.
 
 Two notes on naming:
 
@@ -72,17 +72,17 @@ Two notes on naming:
 
 ## Write dispositions
 
-| dlt write disposition | Altertable ingest mode               | Notes                                                |
-| --------------------- | ------------------------------------ | ---------------------------------------------------- |
-| `append`              | `CREATE_APPEND`                      | Creates the table on first load, appends afterwards. |
-| `replace`             | `REPLACE`, then `APPEND`             | The first file of each load recreates the table.     |
-| `merge`               | `CREATE_APPEND` + server-side upsert | Upserts on the `primary_key`.                        |
+| dlt write disposition | HTTP call                                | Notes                                                |
+| --------------------- | ---------------------------------------- | ---------------------------------------------------- |
+| `append`              | `POST /upload?mode=create_append`        | Creates the table on first load, appends afterwards. |
+| `replace`             | `mode=overwrite`, then `mode=append`     | The first file of each load recreates the table.     |
+| `merge`               | `POST /upsert?primary_key=…&cursor_field=…` | Server-side upsert on the `primary_key`.          |
 
 Merge always runs as a server-side upsert on the `primary_key`, which matches what dlt's default
 merge does for a primary-key resource. Configurations with different semantics fail the load with
 a terminal error instead of loading under different semantics: an explicit `delete-insert` or
-`scd2` strategy, a `merge_key`, a `hard_delete` column, a missing `primary_key`, a table whose
-columns are all part of the primary key, or an ascending `dedup_sort`.
+`scd2` strategy, a `merge_key`, a `hard_delete` column, a missing `primary_key`, or an ascending
+`dedup_sort`.
 
 A merge that sends a subset of columns updates only those columns on matched rows; omitted
 columns keep their current values in the lakehouse.
@@ -103,26 +103,36 @@ column marked with dlt's standard [`dedup_sort` hint](https://dlthub.com/docs/ge
 Altertable arbitrates against existing table rows as well as within the batch, a superset of
 dlt's batch-only deduplication. Without the hint, which row wins is up to the server.
 
+## dlt system columns and tables
+
+Like dlt's SQL destinations, this destination loads dlt's lineage columns and system tables:
+every row carries `_dlt_id` and `_dlt_load_id`, and the dataset gains `_dlt_loads`,
+`_dlt_version` and `_dlt_pipeline_state` tables. They make every row traceable to the load that
+produced it.
+
 ## Schema evolution
 
 When dlt's schema evolution adds a column, the destination issues `ALTER TABLE ... ADD COLUMN`
-before ingesting, so existing tables follow the source. Removed columns stay in the table and
-keep their values. Columns that only ever contained `NULL` are dropped by dlt at normalize time
-with a warning, before they reach the destination.
+through `POST /query` before uploading, so existing tables follow the source. Removed columns
+stay in the table and keep their values. Columns that only ever contained `NULL` are dropped by
+dlt at normalize time with a warning, before they reach the destination.
 
 Nested data does not become child tables: the destination sets `max_table_nesting=0`, dlt's
 default for custom destinations, so lists and objects land as JSON strings in the parent table.
-Child tables would need the dlt linking columns this destination deliberately skips.
 
 ## Atomicity and retries
 
-Each parquet file is one ingest statement, applied atomically by the server: a file either lands
-fully or not at all. A load split across several files is not atomic as a whole, and the first
-file of a `replace` load recreates the table.
+Each parquet file is one HTTP POST, applied atomically by the server: a file either lands fully
+or not at all. A load split across several files is not atomic as a whole, and the first file of
+a `replace` load recreates the table.
 
-Transient failures (network, server errors) are retried 5 times by dlt
-(`load.raise_on_max_retries`). Bad credentials and unsupported merge configurations fail
-immediately with a terminal error naming the endpoint and table.
+Failures map onto dlt's retry contract: authentication and invalid-request errors (HTTP 4xx)
+fail the job immediately with a terminal error, while server errors, capacity timeouts (HTTP
+5xx) and connection failures are retried 5 times by dlt (`load.raise_on_max_retries`). The
+upload read timeout is one hour, because the server only answers once the worker finished
+ingesting; do not lower it aggressively, an aborted request that the server completes anyway
+turns a retry into duplicate appended rows. `merge` tables are idempotent under retry, `append`
+is at least once.
 
 The destination declares `loader_parallelism_strategy="table-sequential"`, and the `replace`
 bookkeeping depends on it. Do not override it with `LOAD__PARALLELISM_STRATEGY=parallel`: two
@@ -142,18 +152,20 @@ Either persist `pipelines_dir` between runs, or bootstrap the cursor from the de
 before extracting:
 
 ```python
-from altertable_flightsql import Client
+import json
+import requests
 
-with Client(username, password, host=host, port=port, tls=tls) as client:
-    table = client.query(f'SELECT max(lastmodifieddate) AS cursor FROM "{table_name}"').read_all()
-    since = table.column("cursor")[0].as_py() or 0
+response = requests.post(
+    "https://api.altertable.ai/query",
+    json={"statement": f'SELECT count(*) AS n, max(lastmodifieddate) AS m FROM "{table_name}"'},
+    auth=(username, password),
+    timeout=(10, 300),
+)
+count, since = [json.loads(line) for line in response.text.splitlines()][2]
 ```
 
-## dlt internal columns
-
-`_dlt_id` and `_dlt_load_id` are not loaded. dlt writes them into the parquet file even though it
-hides them from the table schema handed to a custom destination, so only the columns dlt declares
-in that schema are ingested.
+Check the row count: a legitimately empty table gives `count = 0`, while `count` being `NULL`
+signals a masked mid-stream error and the read should be retried.
 
 ## Develop
 
@@ -163,12 +175,13 @@ uv run pytest
 uv run ruff check .
 ```
 
-The test suite mocks the Flight client and needs no server. For a live check, run
-[altertable-mock](https://github.com/altertable-ai/altertable-mock) and point a pipeline at it:
+The test suite mocks the HTTP API and needs no server. For a live check, run
+[altertable-mock](https://github.com/altertable-ai/altertable-mock) and point a pipeline at its
+Lakehouse REST port:
 
 ```bash
-docker run -d -p 15102:15002 \
-  -e ALTERTABLE_MOCK_FLIGHT_PORT=15002 -e ALTERTABLE_MOCK_USERS="dlt-demo:lk_demo" \
+docker run -d -p 15100:15000 \
+  -e ALTERTABLE_MOCK_LAKEHOUSE_PORT=15000 -e ALTERTABLE_MOCK_USERS="dlt-demo:lk_demo" \
   ghcr.io/altertable-ai/altertable-mock:latest
 ```
 

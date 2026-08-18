@@ -10,9 +10,8 @@ keywords = ["dlt", "altertable", "lakehouse", "arrow", "flight-sql"]
 requires-python = ">=3.12"
 
 dependencies = [
-    "altertable-flightsql>=0.3.2",
     "dlt[parquet]~=1.19",
-    "pyarrow>=15.0.0",
+    "requests>=2.26",
 ]
 
 [project.urls]

@@ -1,14 +1,13 @@
+from pathlib import Path
 from typing import Any
 
 import pytest
-from altertable_flightsql.client import IngestIncrementalOptions, IngestTableMode
 from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.schema import TTableSchema
-from pyarrow.flight import FlightInternalError
 
 import dlt_altertable.destination
 from dlt_altertable import altertable
-from tests.conftest import FlightRecorder
+from tests.conftest import HttpRecorder
 
 sink = altertable.__wrapped__
 
@@ -21,6 +20,8 @@ CONNECTION = {
     "port": 15002,
     "tls": False,
 }
+
+BASE_URL = "http://flight.test:15002"
 
 SANDBOX_ENVIRONMENT = {
     "ALTERTABLE_HOST": "flight.sandbox",
@@ -84,24 +85,26 @@ def rows() -> list[dict[str, Any]]:
 @pytest.mark.parametrize(
     ("write_disposition", "expected_mode"),
     [
-        ("append", IngestTableMode.CREATE_APPEND),
-        ("replace", IngestTableMode.REPLACE),
+        ("append", "create_append"),
+        ("replace", "overwrite"),
     ],
 )
-def test_write_disposition_selects_ingest_mode(
-    recorder: FlightRecorder,
+def test_write_disposition_selects_upload_mode(
+    recorder: HttpRecorder,
     write_parquet,
     rows: list[dict[str, Any]],
     write_disposition: str,
-    expected_mode: IngestTableMode,
+    expected_mode: str,
 ) -> None:
     sink(write_parquet(rows), table_schema("contacts", write_disposition), **CONNECTION)
 
-    assert recorder.ingests[0].mode is expected_mode
+    upload = recorder.uploads[0]
+    assert upload.endpoint == "upload"
+    assert upload.params["mode"] == expected_mode
 
 
 def test_replace_only_replaces_the_first_file_of_a_load(
-    recorder: FlightRecorder,
+    recorder: HttpRecorder,
     write_parquet,
     rows: list[dict[str, Any]],
     replaced_tables: list[str],
@@ -109,30 +112,27 @@ def test_replace_only_replaces_the_first_file_of_a_load(
     for part in range(3):
         sink(write_parquet(rows, f"part{part}"), table_schema("deals", "replace"), **CONNECTION)
 
-    assert [ingest.mode for ingest in recorder.ingests] == [
-        IngestTableMode.REPLACE,
-        IngestTableMode.APPEND,
-        IngestTableMode.APPEND,
+    assert [upload.params["mode"] for upload in recorder.uploads] == [
+        "overwrite",
+        "append",
+        "append",
     ]
     assert replaced_tables == ["deals"]
 
 
 @pytest.mark.usefixtures("replaced_tables")
 def test_replace_bookkeeping_is_per_table(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
     sink(write_parquet(rows, "a"), table_schema("contacts", "replace"), **CONNECTION)
     sink(write_parquet(rows, "b"), table_schema("deals", "replace"), **CONNECTION)
 
-    assert [ingest.mode for ingest in recorder.ingests] == [
-        IngestTableMode.REPLACE,
-        IngestTableMode.REPLACE,
-    ]
+    assert [upload.params["mode"] for upload in recorder.uploads] == ["overwrite", "overwrite"]
 
 
 @pytest.mark.usefixtures("replaced_tables")
 def test_merge_with_dedup_sort_becomes_the_server_cursor(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
     table = with_dedup_sort(
         with_primary_key(table_schema("contacts", "merge"), "id"), "lastmodifieddate"
@@ -140,23 +140,24 @@ def test_merge_with_dedup_sort_becomes_the_server_cursor(
 
     sink(write_parquet(rows), table, **CONNECTION)
 
-    assert recorder.ingests[0].mode is IngestTableMode.CREATE_APPEND
-    assert recorder.ingests[0].incremental_options == IngestIncrementalOptions(
-        primary_key=["id"], cursor_field=["lastmodifieddate"]
-    )
+    upload = recorder.uploads[0]
+    assert upload.endpoint == "upsert"
+    assert upload.params["primary_key"] == "id"
+    assert upload.params["cursor_field"] == "lastmodifieddate"
 
 
 @pytest.mark.usefixtures("replaced_tables")
 def test_merge_without_dedup_sort_upserts_on_primary_key_alone(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
-    table = with_primary_key(table_schema("contacts", "merge"), "id")
+    table = with_primary_key(table_schema("contacts", "merge"), "id", "lastmodifieddate")
 
     sink(write_parquet(rows), table, **CONNECTION)
 
-    assert recorder.ingests[0].incremental_options == IngestIncrementalOptions(
-        primary_key=["id"], cursor_field=[]
-    )
+    upload = recorder.uploads[0]
+    assert upload.endpoint == "upsert"
+    assert upload.params["primary_key"] == "id,lastmodifieddate"
+    assert "cursor_field" not in upload.params
 
 
 @pytest.mark.usefixtures("replaced_tables")
@@ -164,10 +165,6 @@ def test_merge_without_dedup_sort_upserts_on_primary_key_alone(
     ("table", "unsupported"),
     [
         (table_schema("contacts", "merge"), "merge without a primary_key"),
-        (
-            with_primary_key(table_schema("links", "merge"), "id", "lastmodifieddate"),
-            "merge with primary-key columns only",
-        ),
         (
             with_dedup_sort(
                 with_primary_key(table_schema("contacts", "merge"), "id"),
@@ -177,10 +174,10 @@ def test_merge_without_dedup_sort_upserts_on_primary_key_alone(
             "dedup_sort 'asc'",
         ),
     ],
-    ids=["no_primary_key", "primary_key_only_columns", "ascending_dedup_sort"],
+    ids=["no_primary_key", "ascending_dedup_sort"],
 )
 def test_unsupported_merge_configurations_are_terminal(
-    recorder: FlightRecorder,
+    recorder: HttpRecorder,
     write_parquet,
     rows: list[dict[str, Any]],
     table: TTableSchema,
@@ -190,12 +187,13 @@ def test_unsupported_merge_configurations_are_terminal(
         sink(write_parquet(rows), table, **CONNECTION)
 
     assert f"Table {table['name']}: {unsupported}" in str(failure.value)
-    assert recorder.ingests == []
+    assert recorder.uploads == []
+    assert recorder.statements == []
 
 
 @pytest.mark.usefixtures("replaced_tables")
 def test_merge_with_hard_delete_hint_is_terminal(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
     table = with_primary_key(table_schema("contacts", "merge"), "id")
     table["columns"]["deleted"] = {"name": "deleted", "data_type": "bool", "hard_delete": True}
@@ -204,12 +202,12 @@ def test_merge_with_hard_delete_hint_is_terminal(
         sink(write_parquet(rows), table, **CONNECTION)
 
     assert "hard_delete" in str(failure.value)
-    assert recorder.ingests == []
+    assert recorder.uploads == []
 
 
 @pytest.mark.usefixtures("replaced_tables")
 def test_append_ignores_primary_key_and_dedup_sort_hints(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
     table = with_dedup_sort(
         with_primary_key(table_schema("contacts", "append"), "id"), "lastmodifieddate"
@@ -217,92 +215,47 @@ def test_append_ignores_primary_key_and_dedup_sort_hints(
 
     sink(write_parquet(rows), table, **CONNECTION)
 
-    assert recorder.ingests[0].incremental_options is None
+    upload = recorder.uploads[0]
+    assert upload.endpoint == "upload"
+    assert "primary_key" not in upload.params
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_schema_evolution_adds_new_columns_before_ingest(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+def test_schema_evolution_adds_new_columns_before_the_upload(
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
     recorder.existing_columns = ["id"]
 
     sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
 
-    assert recorder.statements == [
+    assert recorder.alters == [
         'ALTER TABLE "lakehouse"."raw"."contacts" '
         'ADD COLUMN IF NOT EXISTS "lastmodifieddate" BIGINT'
     ]
-    assert recorder.ingests[0].rows == rows
+    assert recorder.uploads[0].rows == rows
 
 
 @pytest.mark.usefixtures("replaced_tables")
 def test_new_tables_skip_schema_evolution(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
     sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
 
-    assert len(recorder.queries) == 1
-    assert recorder.statements == []
+    assert len(recorder.schema_lookups) == 1
+    assert recorder.alters == []
 
 
 @pytest.mark.usefixtures("replaced_tables")
 def test_replace_skips_the_column_lookup(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
     sink(write_parquet(rows), table_schema("contacts", "replace"), **CONNECTION)
 
-    assert recorder.queries == []
     assert recorder.statements == []
 
 
-@pytest.mark.usefixtures("replaced_tables")
-def test_wrong_credentials_fail_terminally_naming_the_endpoint(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
-) -> None:
-    recorder.unauthenticated = True
-
-    with pytest.raises(DestinationTerminalException) as failure:
-        sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
-
-    assert "flight.test:15002" in str(failure.value)
-    assert "'user'" in str(failure.value)
-
-
-@pytest.mark.usefixtures("replaced_tables")
-def test_flight_errors_name_the_load_target(
-    recorder: FlightRecorder,
-    write_parquet,
-    rows: list[dict[str, Any]],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def failing_ingest(self: Any, **_: Any) -> None:
-        raise FlightInternalError("Failed to create table")
-
-    monkeypatch.setattr(dlt_altertable.destination.Client, "ingest", failing_ingest)
-
-    with pytest.raises(RuntimeError) as failure:
-        sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
-
-    assert "lakehouse.raw.contacts" in str(failure.value)
-    assert "flight.test:15002" in str(failure.value)
-
-
-@pytest.mark.usefixtures("replaced_tables")
-def test_parquet_file_is_streamed_through_a_single_ingest(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
-) -> None:
-    sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
-
-    ingest = recorder.ingests[0]
-    assert ingest.rows == rows
-    assert ingest.schema.names == ["id", "lastmodifieddate"]
-    assert ingest.catalog_name == "lakehouse"
-    assert ingest.schema_name == "raw"
-    assert recorder.calls == ["ingest", "close_writer", "close_client"]
-
-
 def test_schema_lookup_runs_once_per_table_per_load(
-    recorder: FlightRecorder,
+    recorder: HttpRecorder,
     write_parquet,
     rows: list[dict[str, Any]],
     evolved_tables: list[str],
@@ -311,32 +264,67 @@ def test_schema_lookup_runs_once_per_table_per_load(
     sink(write_parquet(rows, "a"), table_schema("contacts", "append"), **CONNECTION)
     sink(write_parquet(rows, "b"), table_schema("contacts", "append"), **CONNECTION)
 
-    assert len(recorder.queries) == 1
+    assert len(recorder.schema_lookups) == 1
     assert evolved_tables == ["contacts"]
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_every_parquet_batch_is_streamed(recorder: FlightRecorder, write_parquet) -> None:
-    many_rows = [{"id": row, "lastmodifieddate": row} for row in range(70_000)]
-
-    sink(write_parquet(many_rows), table_schema("contacts", "append"), **CONNECTION)
-
-    ingest = recorder.ingests[0]
-    assert len(ingest.batches) == 2, "70,000 rows must span two default-sized arrow batches"
-    assert sum(batch.num_rows for batch in ingest.batches) == 70_000
-
-
-@pytest.mark.usefixtures("replaced_tables")
-def test_missing_parquet_columns_narrow_the_ingest_schema(
-    recorder: FlightRecorder, write_parquet
+def test_wrong_credentials_fail_terminally(
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
-    sink(write_parquet([{"id": 1}]), table_schema("contacts", "append"), **CONNECTION)
+    recorder.unauthenticated = True
 
-    assert recorder.ingests[0].schema.names == ["id"]
+    with pytest.raises(DestinationTerminalException) as failure:
+        sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
+
+    assert "401" in str(failure.value)
+    assert recorder.uploads == []
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_empty_parquet_file_still_creates_the_table(recorder: FlightRecorder, tmp_path) -> None:
+def test_server_failures_are_transient_and_name_the_load_target(
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    recorder.transient_upload_failures = 1
+
+    with pytest.raises(RuntimeError) as failure:
+        sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
+
+    assert "lakehouse.raw.contacts" in str(failure.value)
+    assert "503" in str(failure.value)
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_query_stream_errors_are_transient(
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    recorder.query_error = "worker lease expired"
+
+    with pytest.raises(RuntimeError) as failure:
+        sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
+
+    assert "worker lease expired" in str(failure.value)
+    assert recorder.uploads == []
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_the_parquet_file_is_posted_verbatim(
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    path = write_parquet(rows)
+
+    sink(path, table_schema("contacts", "append"), **CONNECTION)
+
+    upload = recorder.uploads[0]
+    assert upload.url == f"{BASE_URL}/upload"
+    assert upload.body == Path(path).read_bytes()
+    assert upload.headers["Content-Type"] == "application/parquet"
+    assert upload.params["catalog"] == "lakehouse"
+    assert upload.params["schema"] == "raw"
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_empty_parquet_file_is_still_uploaded(recorder: HttpRecorder, tmp_path) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -345,32 +333,25 @@ def test_empty_parquet_file_still_creates_the_table(recorder: FlightRecorder, tm
 
     sink(str(path), table_schema("contacts", "replace"), **CONNECTION)
 
-    ingest = recorder.ingests[0]
-    assert ingest.batches == []
-    assert ingest.schema.names == ["id"]
-    assert ingest.mode is IngestTableMode.REPLACE
+    upload = recorder.uploads[0]
+    assert upload.rows == []
+    assert upload.params["mode"] == "overwrite"
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_connection_parameters_reach_the_client(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+def test_connection_parameters_reach_the_request(
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
     sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
 
-    assert recorder.connections == [
-        {
-            "username": "user",
-            "password": "secret",
-            "host": "flight.test",
-            "port": 15002,
-            "tls": False,
-        }
-    ]
+    upload = recorder.uploads[0]
+    assert upload.url.startswith(BASE_URL)
+    assert upload.auth == ("user", "secret")
 
 
 @pytest.mark.usefixtures("replaced_tables")
 def test_connection_falls_back_to_the_sandbox_environment(
-    recorder: FlightRecorder,
+    recorder: HttpRecorder,
     write_parquet,
     rows: list[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
@@ -380,22 +361,16 @@ def test_connection_falls_back_to_the_sandbox_environment(
 
     sink(write_parquet(rows), table_schema("contacts", "append"))
 
-    assert recorder.connections == [
-        {
-            "username": "sandbox",
-            "password": "sandbox-secret",
-            "host": "flight.sandbox",
-            "port": 15002,
-            "tls": False,
-        }
-    ]
-    assert recorder.ingests[0].catalog_name == "lakehouse"
-    assert recorder.ingests[0].schema_name == "crm"
+    upload = recorder.uploads[0]
+    assert upload.url == "http://flight.sandbox:15002/upload"
+    assert upload.auth == ("sandbox", "sandbox-secret")
+    assert upload.params["catalog"] == "lakehouse"
+    assert upload.params["schema"] == "crm"
 
 
 @pytest.mark.usefixtures("replaced_tables")
 def test_missing_configuration_is_terminal_and_names_every_surface(
-    recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
     with pytest.raises(DestinationTerminalException) as failure:
         sink(write_parquet(rows), table_schema("contacts", "append"))
@@ -403,4 +378,4 @@ def test_missing_configuration_is_terminal_and_names_every_surface(
     assert "host is not configured" in str(failure.value)
     assert "destination.altertable.host" in str(failure.value)
     assert "ALTERTABLE_HOST" in str(failure.value)
-    assert recorder.connections == []
+    assert recorder.uploads == []
