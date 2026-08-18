@@ -23,7 +23,7 @@ DESTINATION_OPTIONS = {
 
 BASE_URL = "http://flight.test:15002"
 
-SANDBOX_ENVIRONMENT = {
+ALTERTABLE_ENVIRONMENT = {
     "ALTERTABLE_HOST": "flight.sandbox",
     "ALTERTABLE_CATALOG": "lakehouse",
     "ALTERTABLE_SCHEMA": "crm",
@@ -452,13 +452,13 @@ def test_connection_parameters_reach_the_request(
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_connection_falls_back_to_the_sandbox_environment(
+def test_connection_falls_back_to_the_altertable_environment_variables(
     server: FakeServer,
     write_parquet,
     rows: list[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for variable, value in SANDBOX_ENVIRONMENT.items():
+    for variable, value in ALTERTABLE_ENVIRONMENT.items():
         monkeypatch.setenv(variable, value)
 
     sink(write_parquet(rows), table_schema("contacts", "append"))

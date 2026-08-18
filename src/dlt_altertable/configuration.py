@@ -5,7 +5,7 @@ from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.typing import TSecretStrValue
 from dlt.destinations.impl.destination.configuration import CustomDestinationClientConfiguration
 
-REQUIRED_SANDBOX_ENV_VARS = {
+REQUIRED_ENV_VARS = {
     "host": "ALTERTABLE_HOST",
     "catalog": "ALTERTABLE_CATALOG",
     "dataset_name": "ALTERTABLE_SCHEMA",
@@ -16,8 +16,8 @@ REQUIRED_SANDBOX_ENV_VARS = {
 
 @configspec
 class AltertableClientConfiguration(CustomDestinationClientConfiguration):
-    """Falls back to the `ALTERTABLE_*` variables an Altertable sandbox injects after dlt's
-    own providers, so pipelines run in a sandbox with zero configuration."""
+    """Falls back to the `ALTERTABLE_*` environment variables after dlt's own providers,
+    so a preconfigured environment needs no explicit destination configuration."""
 
     host: str | None = None
     catalog: str | None = None
@@ -28,7 +28,7 @@ class AltertableClientConfiguration(CustomDestinationClientConfiguration):
     tls: bool | None = None
 
     def on_resolved(self) -> None:
-        for parameter, env_var in REQUIRED_SANDBOX_ENV_VARS.items():
+        for parameter, env_var in REQUIRED_ENV_VARS.items():
             value = getattr(self, parameter) or os.environ.get(env_var)
             if not value:
                 raise DestinationTerminalException(
