@@ -149,8 +149,6 @@ with Client(username, password, host=host, port=port, tls=tls) as client:
     since = table.column("cursor")[0].as_py() or 0
 ```
 
-`examples/sandboxed_task_hubspot.py` takes the second route.
-
 ## dlt internal columns
 
 `_dlt_id` and `_dlt_load_id` are not loaded. dlt writes them into the parquet file even though it
