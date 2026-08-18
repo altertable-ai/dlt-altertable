@@ -17,7 +17,7 @@ column. Merge files always post as they are, so columns a file omits keep their 
 uv add dlt-altertable
 ```
 
-Supported: Python 3.12 to 3.14, `dlt >= 1.19`. The only other dependencies are `pyarrow` and `requests`.
+Supported: Python 3.12 to 3.14, `dlt >= 1.19`. The only other dependencies are `pyarrow`, `requests`, and `urllib3`.
 
 ## Use
 
