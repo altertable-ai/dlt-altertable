@@ -37,7 +37,7 @@ class FakeResponse:
 
 
 @dataclass
-class HttpRecorder:
+class FakeServer:
     uploads: list[RecordedRequest] = field(default_factory=list)
     attempted_tables: list[str] = field(default_factory=list)
     statements: list[str] = field(default_factory=list)
@@ -67,7 +67,7 @@ class HttpRecorder:
         return [statement for statement in self.statements if statement.startswith("CREATE")]
 
 
-def recording_post(recorder: HttpRecorder):
+def fake_post(server: FakeServer):
     def post(
         url: str,
         params: dict[str, Any] | None = None,
@@ -77,33 +77,33 @@ def recording_post(recorder: HttpRecorder):
         headers: dict[str, str] | None = None,
         timeout: Any = None,
     ) -> FakeResponse:
-        if recorder.unauthenticated:
+        if server.unauthenticated:
             return FakeResponse(401, "Invalid credentials")
 
         if url.endswith("/query"):
             statement = json["statement"]
-            recorder.statements.append(statement)
-            if recorder.query_error is not None:
-                lines: list[Any] = [{}, [], {"error": recorder.query_error}]
+            server.statements.append(statement)
+            if server.query_error is not None:
+                lines: list[Any] = [{}, [], {"error": server.query_error}]
             elif statement.startswith("ALTER"):
                 lines = [{}, []]
             else:
                 lines = [
                     {},
                     [{"name": "column_name", "type": "VARCHAR"}],
-                    *[[column] for column in recorder.existing_columns],
+                    *[[column] for column in server.existing_columns],
                 ]
             return FakeResponse(200, "\n".join(jsonlib.dumps(line) for line in lines))
 
         table_name = params["table"]
         if not table_name.startswith("_dlt"):
-            recorder.attempted_tables.append(table_name)
-            if recorder.successes_before_failures > 0:
-                recorder.successes_before_failures -= 1
-            elif recorder.terminal_upload_failure:
+            server.attempted_tables.append(table_name)
+            if server.successes_before_failures > 0:
+                server.successes_before_failures -= 1
+            elif server.terminal_upload_failure:
                 return FakeResponse(400, "injected terminal failure")
-            elif recorder.transient_upload_failures:
-                recorder.transient_upload_failures -= 1
+            elif server.transient_upload_failures:
+                server.transient_upload_failures -= 1
                 return FakeResponse(503, "no compute capacity")
 
         if hasattr(data, "read"):
@@ -113,7 +113,7 @@ def recording_post(recorder: HttpRecorder):
             body = b"".join(chunks)
         else:
             body = data
-        recorder.uploads.append(
+        server.uploads.append(
             RecordedRequest(
                 url=url,
                 endpoint=url.rsplit("/", 1)[1],
@@ -135,15 +135,15 @@ def isolated_altertable_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def recorder(monkeypatch: pytest.MonkeyPatch) -> HttpRecorder:
-    recorder = HttpRecorder()
+def server(monkeypatch: pytest.MonkeyPatch) -> FakeServer:
+    server = FakeServer()
     monkeypatch.setattr(
         dlt_altertable.api,
         "session",
-        SimpleNamespace(post=recording_post(recorder)),
+        SimpleNamespace(post=fake_post(server)),
         raising=True,
     )
-    return recorder
+    return server
 
 
 @pytest.fixture

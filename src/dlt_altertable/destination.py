@@ -12,7 +12,7 @@ from dlt.common.typing import TSecretStrValue
 
 from dlt_altertable.api import post_parquet
 from dlt_altertable.configuration import AltertableClientConfiguration
-from dlt_altertable.schema import align_to_table_schema, sync_table_schema
+from dlt_altertable.table_schema import align_to_table_schema, create_or_evolve_table
 
 MERGE_STRATEGY_HINT = "x-merge-strategy"
 
@@ -42,7 +42,7 @@ def unsupported_merge_configuration(table: TTableSchema) -> str | None:
     return None
 
 
-def merge_params(table: TTableSchema) -> dict[str, str] | None:
+def upsert_params(table: TTableSchema) -> dict[str, str] | None:
     if table.get("write_disposition") != "merge":
         return None
     if unsupported := unsupported_merge_configuration(table):
@@ -68,11 +68,11 @@ def upload_mode(table: TTableSchema, table_already_replaced: bool) -> str:
     return "append"
 
 
-def tables_already_replaced() -> list[str]:
+def replaced_tables() -> list[str]:
     return dlt.current.destination_state().setdefault("replaced_tables", [])
 
 
-def tables_already_evolved() -> list[str]:
+def evolved_tables() -> list[str]:
     return dlt.current.destination_state().setdefault("evolved_tables", [])
 
 
@@ -111,20 +111,20 @@ def altertable(
     dataset_name = config.dataset_name
     base_url = config.base_url
     auth = config.basic_auth
-    upsert_params = merge_params(table)
+    upsert = upsert_params(table)
 
-    replaced_tables = tables_already_replaced()
-    evolved_tables = tables_already_evolved()
-    mode = upload_mode(table, table["name"] in replaced_tables)
+    already_replaced = replaced_tables()
+    already_evolved = evolved_tables()
+    mode = upload_mode(table, table["name"] in already_replaced)
 
-    if mode != "overwrite" and table["name"] not in evolved_tables:
-        if sync_table_schema(base_url, auth, catalog, dataset_name, table):
-            evolved_tables.append(table["name"])
+    if mode != "overwrite" and table["name"] not in already_evolved:
+        if create_or_evolve_table(base_url, auth, catalog, dataset_name, table):
+            already_evolved.append(table["name"])
 
     params = {"catalog": catalog, "schema": dataset_name, "table": table["name"]}
-    if upsert_params is not None:
+    if upsert is not None:
         endpoint = "upsert"
-        params |= upsert_params
+        params |= upsert
     else:
         endpoint = "upload"
         params["mode"] = mode
@@ -144,4 +144,4 @@ def altertable(
             os.unlink(aligned_path)
 
     if mode == "overwrite":
-        replaced_tables.append(table["name"])
+        already_replaced.append(table["name"])

@@ -64,7 +64,7 @@ def create_table(
     )
 
 
-def sync_table_schema(
+def create_or_evolve_table(
     base_url: str, auth: tuple[str, str], catalog: str, dataset_name: str, table: TTableSchema
 ) -> bool:
     """Neither append nor upsert creates its target: the server fails an append on a missing table

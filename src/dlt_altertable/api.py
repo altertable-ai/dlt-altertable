@@ -1,5 +1,6 @@
 import json
 from http import HTTPStatus
+from typing import Any
 
 import requests
 from dlt.common.destination.exceptions import DestinationTerminalException
@@ -20,9 +21,9 @@ TERMINAL_STATUSES = {
 class LargeBlockAdapter(requests.adapters.HTTPAdapter):
     """urllib3's default 16KiB blocksize measured 31% slower than 1MiB on loopback uploads."""
 
-    def init_poolmanager(self, *args, **kwargs):
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
         kwargs["blocksize"] = UPLOAD_BLOCK_BYTES
-        return super().init_poolmanager(*args, **kwargs)
+        super().init_poolmanager(*args, **kwargs)
 
 
 def make_session() -> requests.Session:
