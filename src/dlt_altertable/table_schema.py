@@ -5,7 +5,6 @@ from contextlib import contextmanager
 
 import pyarrow.parquet as pq
 from dlt.common import logger
-from dlt.common.configuration.container import Container
 from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
 from dlt.common.destination.capabilities import DestinationCapabilitiesContext
 from dlt.common.destination.exceptions import DestinationTerminalException
@@ -42,13 +41,6 @@ def sql_type(column: TColumnSchema) -> str:
     if column["data_type"] == "timestamp" and column.get("timezone") is False:
         return "TIMESTAMP"
     return SQL_TYPES[column["data_type"]]
-
-
-def destination_capabilities() -> DestinationCapabilitiesContext:
-    try:
-        return Container()[DestinationCapabilitiesContext]
-    except Exception:
-        return DestinationCapabilitiesContext.generic_capabilities()
 
 
 def qualified_table_name(config: AltertableClientConfiguration, table_name: str) -> str:
@@ -122,7 +114,7 @@ def aligned_parquet(parquet_file_path: str, table: TTableSchema) -> Iterator[str
         pq.read_table(parquet_file_path),
         table["columns"],
         NamingConvention(),
-        destination_capabilities(),
+        DestinationCapabilitiesContext.generic_capabilities(),
     )
     handle, aligned_path = tempfile.mkstemp(suffix=".parquet")
     os.close(handle)
