@@ -74,7 +74,7 @@ Two notes on naming:
 
 | dlt write disposition | HTTP call                                | Notes                                                |
 | --------------------- | ---------------------------------------- | ---------------------------------------------------- |
-| `append`              | `POST /upload?mode=create_append`        | Creates the table on first load, appends afterwards. |
+| `append`              | `POST /upload?mode=append`               | The destination creates or evolves the table first.  |
 | `replace`             | `mode=overwrite`, then `mode=append`     | The first file of each load recreates the table.     |
 | `merge`               | `POST /upsert?primary_key=…&cursor_field=…` | Server-side upsert on the `primary_key`.          |
 
@@ -112,10 +112,12 @@ produced it.
 
 ## Schema evolution
 
-When dlt's schema evolution adds a column, the destination issues `ALTER TABLE ... ADD COLUMN`
-through `POST /query` before uploading, so existing tables follow the source. Removed columns
-stay in the table and keep their values. Columns that only ever contained `NULL` are dropped by
-dlt at normalize time with a warning, before they reach the destination.
+The destination owns the target table's schema. Before each load it syncs the table through
+`POST /query`: a missing table is created with typed DDL derived from dlt's schema, and when
+dlt's schema evolution adds a column, the destination issues `ALTER TABLE ... ADD COLUMN`, so
+existing tables follow the source. Removed columns stay in the table and keep their values.
+Columns that only ever contained `NULL` are dropped by dlt at normalize time with a warning,
+before they reach the destination.
 
 Nested data does not become child tables: the destination sets `max_table_nesting=0`, dlt's
 default for custom destinations, so lists and objects land as JSON strings in the parent table.
