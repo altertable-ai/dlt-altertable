@@ -4,6 +4,7 @@ from typing import Any
 
 import requests
 from dlt.common.destination.exceptions import DestinationTerminalException
+from requests.adapters import HTTPAdapter
 
 from dlt_altertable.configuration import AltertableClientConfiguration
 
@@ -21,7 +22,7 @@ TERMINAL_STATUSES = {
 }
 
 
-class LargeBlockAdapter(requests.adapters.HTTPAdapter):
+class LargeBlockAdapter(HTTPAdapter):
     """A load job posts a whole parquet file in one stream, and urllib3's default blocksize is
     sized for ordinary requests, not for a file-sized body."""
 

@@ -1,4 +1,5 @@
 import os
+from typing import cast
 
 from dlt.common.configuration import configspec
 from dlt.common.destination.exceptions import DestinationTerminalException
@@ -48,4 +49,4 @@ class AltertableClientConfiguration(CustomDestinationClientConfiguration):
 
     @property
     def basic_auth(self) -> tuple[str, str]:
-        return (self.username, self.password)
+        return cast(tuple[str, str], (self.username, self.password))

@@ -1,3 +1,5 @@
+from typing import cast
+
 import dlt
 from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.schema import TTableSchema
@@ -68,7 +70,8 @@ def evolved_tables() -> list[str]:
     return dlt.current.destination_state().setdefault("evolved_tables", [])
 
 
-@dlt.destination(
+# batch_size=0 hands each load job a file path, the one branch of dlt's `TDataItems | str` argument.
+@dlt.destination(  # ty: ignore[invalid-argument-type]
     name="altertable",
     naming_convention="direct",
     loader_file_format="parquet",
@@ -81,20 +84,25 @@ def evolved_tables() -> list[str]:
 def altertable(
     parquet_file_path: str,
     table: TTableSchema,
-    config: AltertableClientConfiguration = None,
+    config: AltertableClientConfiguration = dlt.config.value,
 ) -> None:
     upsert = upsert_params(table)
+    table_name = cast(str, table["name"])
 
     already_replaced = replaced_tables()
     already_evolved = evolved_tables()
-    mode = upload_mode(table, table["name"] in already_replaced)
+    mode = upload_mode(table, table_name in already_replaced)
 
-    if mode != "overwrite" and table["name"] not in already_evolved:
+    if mode != "overwrite" and table_name not in already_evolved:
         if create_or_evolve_table(config, table):
-            already_evolved.append(table["name"])
+            already_evolved.append(table_name)
 
-    params = {"catalog": config.catalog, "schema": config.dataset_name, "table": table["name"]}
-    action = f"loading {config.catalog}.{config.dataset_name}.{table['name']}"
+    params = {
+        "catalog": cast(str, config.catalog),
+        "schema": cast(str, config.dataset_name),
+        "table": table_name,
+    }
+    action = f"loading {config.catalog}.{config.dataset_name}.{table_name}"
     if upsert is not None:
         post_parquet(config, "upsert", params | upsert, parquet_file_path, action)
     else:
@@ -103,4 +111,4 @@ def altertable(
             post_parquet(config, "upload", params, upload_path, action)
 
     if mode == "overwrite":
-        already_replaced.append(table["name"])
+        already_replaced.append(table_name)

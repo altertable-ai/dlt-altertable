@@ -2,6 +2,7 @@ import os
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import cast
 
 import pyarrow.parquet as pq
 from dlt.common import logger
@@ -40,17 +41,18 @@ def sql_type(column: TColumnSchema) -> str:
         return f"DECIMAL({precision},{column.get('scale', 0)})"
     if column["data_type"] == "timestamp" and column.get("timezone") is False:
         return "TIMESTAMP"
-    return SQL_TYPES[column["data_type"]]
+    return SQL_TYPES[cast(str, column["data_type"])]
 
 
 def qualified_table_name(config: AltertableClientConfiguration, table_name: str) -> str:
     return ".".join(
         escape_postgres_identifier(part)
-        for part in (config.catalog, config.dataset_name, table_name)
+        for part in cast(tuple[str, str, str], (config.catalog, config.dataset_name, table_name))
     )
 
 
 def create_table(config: AltertableClientConfiguration, table: TTableSchema) -> None:
+    table_name = cast(str, table["name"])
     columns = ", ".join(
         f"{escape_postgres_identifier(name)} {sql_type(column)}"
         for name, column in table["columns"].items()
@@ -58,15 +60,15 @@ def create_table(config: AltertableClientConfiguration, table: TTableSchema) -> 
     execute_sql(
         config,
         "CREATE SCHEMA IF NOT EXISTS "
-        f"{escape_postgres_identifier(config.catalog)}"
-        f".{escape_postgres_identifier(config.dataset_name)}",
+        f"{escape_postgres_identifier(cast(str, config.catalog))}"
+        f".{escape_postgres_identifier(cast(str, config.dataset_name))}",
     )
     execute_sql(
         config,
-        f"CREATE TABLE IF NOT EXISTS {qualified_table_name(config, table['name'])} ({columns})",
+        f"CREATE TABLE IF NOT EXISTS {qualified_table_name(config, table_name)} ({columns})",
     )
     logger.info(
-        f"Created table {config.catalog}.{config.dataset_name}.{table['name']} "
+        f"Created table {config.catalog}.{config.dataset_name}.{table_name} "
         f"with {len(table['columns'])} columns"
     )
 
@@ -77,12 +79,13 @@ def create_or_evolve_table(config: AltertableClientConfiguration, table: TTableS
 
     Returns whether the lookup found an existing table, the only answer worth caching for the
     rest of the load: a CREATE is never read back to confirm what the table now holds."""
+    table_name = cast(str, table["name"])
     rows = execute_sql(
         config,
         "SELECT column_name FROM information_schema.columns "
         f"WHERE table_catalog = {escape_duckdb_literal(config.catalog)} "
         f"AND table_schema = {escape_duckdb_literal(config.dataset_name)} "
-        f"AND table_name = {escape_duckdb_literal(table['name'])}",
+        f"AND table_name = {escape_duckdb_literal(table_name)}",
     )
     existing = {row[0] for row in rows}
     if not existing:
@@ -92,11 +95,11 @@ def create_or_evolve_table(config: AltertableClientConfiguration, table: TTableS
         if name not in existing:
             execute_sql(
                 config,
-                f"ALTER TABLE {qualified_table_name(config, table['name'])} "
+                f"ALTER TABLE {qualified_table_name(config, table_name)} "
                 f"ADD COLUMN IF NOT EXISTS {escape_postgres_identifier(name)} {sql_type(column)}",
             )
             logger.info(
-                f"Added column {name} to {config.catalog}.{config.dataset_name}.{table['name']}"
+                f"Added column {name} to {config.catalog}.{config.dataset_name}.{table_name}"
             )
     return True
 
