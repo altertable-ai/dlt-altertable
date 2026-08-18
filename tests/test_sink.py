@@ -23,7 +23,6 @@ ALTERTABLE_ENVIRONMENT = {
 }
 
 
-
 def table_schema(name: str, write_disposition: str, **hints: Any) -> TTableSchema:
     return {
         "name": name,
@@ -50,9 +49,7 @@ def with_dedup_sort(table: TTableSchema, column: str, order: str = "desc") -> TT
 @pytest.fixture
 def evolved_tables(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     tables: list[str] = []
-    monkeypatch.setattr(
-        dlt_altertable.destination, "evolved_tables", lambda: tables, raising=True
-    )
+    monkeypatch.setattr(dlt_altertable.destination, "evolved_tables", lambda: tables, raising=True)
     return tables
 
 
@@ -60,9 +57,7 @@ def evolved_tables(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def replaced_tables(monkeypatch: pytest.MonkeyPatch, evolved_tables: list[str]) -> list[str]:
     """Stands in for the per-load-package state, which only exists inside a pipeline run."""
     tables: list[str] = []
-    monkeypatch.setattr(
-        dlt_altertable.destination, "replaced_tables", lambda: tables, raising=True
-    )
+    monkeypatch.setattr(dlt_altertable.destination, "replaced_tables", lambda: tables, raising=True)
     return tables
 
 
@@ -323,9 +318,7 @@ def test_a_created_table_is_not_cached_as_evolved(
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_narrower_files_are_padded_to_the_table_schema(
-    server: FakeServer, write_parquet
-) -> None:
+def test_narrower_files_are_padded_to_the_table_schema(server: FakeServer, write_parquet) -> None:
     narrow_file = write_parquet([{"id": 1}])
 
     sink(narrow_file, table_schema("contacts", "append"), config=make_config())
@@ -336,9 +329,7 @@ def test_narrower_files_are_padded_to_the_table_schema(
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_narrower_merge_files_are_posted_without_padding(
-    server: FakeServer, write_parquet
-) -> None:
+def test_narrower_merge_files_are_posted_without_padding(server: FakeServer, write_parquet) -> None:
     table = with_primary_key(table_schema("contacts", "merge"), "id")
     narrow_file = write_parquet([{"id": 1}])
 

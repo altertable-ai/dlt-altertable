@@ -17,17 +17,15 @@ CONTACTS = [
     {"id": 2, "email": "grace@example.com", "lastmodifieddate": 20},
 ]
 
+
 def without_lineage(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
-        {name: value for name, value in row.items() if not name.startswith("_dlt")}
-        for row in rows
+        {name: value for name, value in row.items() if not name.startswith("_dlt")} for row in rows
     ]
 
 
 def data_uploads(server: FakeServer) -> list[RecordedRequest]:
-    return [
-        upload for upload in server.uploads if not upload.params["table"].startswith("_dlt")
-    ]
+    return [upload for upload in server.uploads if not upload.params["table"].startswith("_dlt")]
 
 
 @pytest.fixture
@@ -59,9 +57,7 @@ def appended_events() -> Iterator[list[dict[str, Any]]]:
     yield [{"id": 1, "kind": "page_view"}]
 
 
-def test_merge_resource_becomes_a_server_side_upsert(
-    server: FakeServer, run_pipeline
-) -> None:
+def test_merge_resource_becomes_a_server_side_upsert(server: FakeServer, run_pipeline) -> None:
     resource = merging_contacts()
     resource.apply_hints(columns={"lastmodifieddate": {"dedup_sort": "desc"}})
 
@@ -124,9 +120,7 @@ def test_replace_appends_the_remaining_files_of_one_load(
     assert set(modes[1:]) == {"append"}
 
 
-def test_replace_is_reissued_when_the_first_attempt_fails(
-    server: FakeServer, run_pipeline
-) -> None:
+def test_replace_is_reissued_when_the_first_attempt_fails(server: FakeServer, run_pipeline) -> None:
     server.transient_upload_failures = 1
 
     run_pipeline(replaced_deals())
@@ -135,9 +129,7 @@ def test_replace_is_reissued_when_the_first_attempt_fails(
     assert [upload.params["mode"] for upload in server.uploads_for("deals")] == ["overwrite"]
 
 
-def test_transient_failures_exhaust_after_five_attempts(
-    server: FakeServer, run_pipeline
-) -> None:
+def test_transient_failures_exhaust_after_five_attempts(server: FakeServer, run_pipeline) -> None:
     server.transient_upload_failures = 99
 
     with pytest.raises(PipelineStepFailed):
@@ -218,9 +210,7 @@ def nested_events() -> Iterator[list[dict[str, Any]]]:
     yield [{"id": 1, "payload": {"a": 1}, "tags": [1, 2]}]
 
 
-def test_nested_data_stays_in_the_parent_table_as_json(
-    server: FakeServer, run_pipeline
-) -> None:
+def test_nested_data_stays_in_the_parent_table_as_json(server: FakeServer, run_pipeline) -> None:
     run_pipeline(nested_events())
 
     assert [upload.params["table"] for upload in data_uploads(server)] == ["events_nested"]
