@@ -17,7 +17,7 @@ table column for column.
 uv add dlt-altertable
 ```
 
-Supported: Python 3.12 to 3.14, `dlt >= 1.19`. The only other dependency is `requests`.
+Supported: Python 3.12 to 3.14, `dlt >= 1.19`. The only other dependencies are `pyarrow` and `requests`.
 
 ## Use
 
@@ -59,10 +59,10 @@ Every setting can also come from dlt's environment variables, which override the
 (`DESTINATION__ALTERTABLE__HOST`, `DESTINATION__ALTERTABLE__PASSWORD`, and so on), or be passed
 directly: `altertable(host=..., catalog=..., dataset_name=...)`.
 
-Inside an Altertable sandbox no configuration is needed at all: the destination picks up the
-`ALTERTABLE_HOST`, `ALTERTABLE_PORT`, `ALTERTABLE_TLS`, `ALTERTABLE_USERNAME`,
-`ALTERTABLE_PASSWORD`, `ALTERTABLE_CATALOG` and `ALTERTABLE_SCHEMA` variables the sandbox
-already provides. The host must be the HTTP API host (`api.…`), not the Flight endpoint.
+No configuration is needed in an environment that already exports the `ALTERTABLE_HOST`,
+`ALTERTABLE_PORT`, `ALTERTABLE_TLS`, `ALTERTABLE_USERNAME`, `ALTERTABLE_PASSWORD`,
+`ALTERTABLE_CATALOG` and `ALTERTABLE_SCHEMA` variables, as an Altertable sandbox does. The
+host must be the HTTP API host (`api.…`), not the Flight SQL endpoint.
 
 Two notes on naming:
 
@@ -79,11 +79,11 @@ Two notes on naming:
 | `replace`             | `mode=overwrite`, then `mode=append`     | The first file of each load recreates the table.     |
 | `merge`               | `POST /upsert?primary_key=…&cursor_field=…` | Server-side upsert on the `primary_key`.          |
 
-Merge always runs as a server-side upsert on the `primary_key`, which matches what dlt's default
-merge does for a primary-key resource. Configurations with different semantics fail the load with
-a terminal error instead of loading under different semantics: an explicit `delete-insert` or
-`scd2` strategy, a `merge_key`, a `hard_delete` column, a missing `primary_key`, or an ascending
-`dedup_sort`.
+Merge always runs as a server-side upsert on the `primary_key`, dlt's `upsert` merge strategy.
+A resource that does not name a strategy is accepted and upserted the same way. Configurations
+the upsert cannot honor fail the load with a terminal error instead of loading under different
+semantics: an explicit `delete-insert` or `scd2` strategy, a `merge_key`, a `hard_delete`
+column, a missing `primary_key`, or an ascending `dedup_sort`.
 
 A merge that sends a subset of columns updates only those columns on matched rows; omitted
 columns keep their current values in the lakehouse.
@@ -129,20 +129,20 @@ Each parquet file is one HTTP POST, applied atomically by the server: a file eit
 or not at all. A load split across several files is not atomic as a whole, and the first file of
 a `replace` load recreates the table.
 
-Failures map onto dlt's retry contract: authentication and invalid-request errors (HTTP 4xx)
-fail the job immediately with a terminal error, while server errors, capacity timeouts (HTTP
-5xx) and connection failures are retried 5 times by dlt (`load.raise_on_max_retries`). The
-upload read timeout is one hour, because the server only answers once the worker finished
-ingesting; do not lower it aggressively, an aborted request that the server completes anyway
-turns a retry into duplicate appended rows. `merge` tables are idempotent under retry, `append`
-is at least once.
+Failures map onto dlt's retry contract: errors a retry cannot fix, such as bad credentials or
+an invalid request, fail the job immediately with a terminal error, while server errors,
+capacity timeouts and connection failures are retried by dlt until the fifth attempt fails
+(`load.raise_on_max_retries`). The upload read timeout is one hour, because the server answers
+only once the file is fully ingested. Do not lower it: a request aborted client side can still
+complete on the server, which turns dlt's retry into duplicate appended rows. `merge` tables
+are idempotent under retry, `append` is at least once.
 
 The destination declares `loader_parallelism_strategy="table-sequential"`, and the `replace`
 bookkeeping depends on it. Do not override it with `LOAD__PARALLELISM_STRATEGY=parallel`: two
 files of one replace load would both recreate the table and silently lose rows.
 
-One caveat discovered the hard way: the target schema is created on demand by the server, so a
-typo in `dataset_name` does not fail, it lands data in a new schema. The catalog, by contrast,
+One caveat discovered the hard way: the target schema is created on demand, so a typo in
+`dataset_name` does not fail, it lands data in a new schema. The catalog, by contrast,
 must exist.
 
 ## Incremental state on ephemeral runners
@@ -167,8 +167,9 @@ response = requests.post(
 count, since = [json.loads(line) for line in response.text.splitlines()][2]
 ```
 
-Check the row count: a legitimately empty table gives `count = 0`, while `count` being `NULL`
-signals a masked mid-stream error and the read should be retried.
+The response streams one JSON line per row after two metadata lines, so the first row sits at
+index 2. Check the row count: a legitimately empty table gives `count = 0`, while a `NULL`
+count means the query failed mid-stream and the read should be retried.
 
 ## Develop
 
