@@ -329,6 +329,19 @@ def test_a_created_table_is_not_cached_as_evolved(
 
 
 @pytest.mark.usefixtures("replaced_tables")
+def test_narrower_files_are_padded_to_the_table_schema(
+    recorder: HttpRecorder, write_parquet
+) -> None:
+    narrow_file = write_parquet([{"id": 1}])
+
+    sink(narrow_file, table_schema("contacts", "append"), **CONNECTION)
+
+    upload = recorder.uploads[0]
+    assert upload.schema.names == ["id", "lastmodifieddate"]
+    assert upload.rows == [{"id": 1, "lastmodifieddate": None}]
+
+
+@pytest.mark.usefixtures("replaced_tables")
 def test_comma_in_key_columns_is_terminal(
     recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:

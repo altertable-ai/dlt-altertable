@@ -7,8 +7,9 @@
 
 A [dlt](https://dlthub.com) destination that loads into the [Altertable](https://altertable.ai)
 lakehouse through the HTTP Lakehouse API. Each dlt load job is one parquet file, posted verbatim
-to `/upload` or `/upsert`. Types pass through untouched: the parquet file dlt writes is exactly
-what the server ingests.
+to `/upload` or `/upsert` whenever the file matches the target schema. A file written before dlt
+evolved the load's schema is padded with typed `NULL` columns first, so every post matches the
+table column for column.
 
 ## Install
 

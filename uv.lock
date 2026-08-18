@@ -217,6 +217,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "dlt", extra = ["parquet"] },
+    { name = "pyarrow" },
     { name = "requests" },
 ]
 
@@ -229,6 +230,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dlt", extras = ["parquet"], specifier = "~=1.19" },
+    { name = "pyarrow", specifier = ">=15.0.0" },
     { name = "requests", specifier = ">=2.26" },
 ]
 

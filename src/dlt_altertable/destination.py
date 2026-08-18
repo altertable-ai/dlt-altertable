@@ -1,7 +1,10 @@
 import json
 import os
+import tempfile
 
 import dlt
+import pyarrow as pa
+import pyarrow.parquet as pq
 import requests
 from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.schema import TTableSchema
@@ -147,6 +150,50 @@ def sql_type(column: TColumnSchema) -> str:
     return SQL_TYPES[column["data_type"]]
 
 
+ARROW_TYPES = {
+    "text": pa.string(),
+    "bigint": pa.int64(),
+    "double": pa.float64(),
+    "bool": pa.bool_(),
+    "date": pa.date32(),
+    "time": pa.time64("us"),
+    "json": pa.string(),
+    "binary": pa.binary(),
+}
+
+
+def arrow_type(column: TColumnSchema) -> pa.DataType:
+    if column["data_type"] == "timestamp":
+        timezone = None if column.get("timezone") is False else "UTC"
+        return pa.timestamp("us", tz=timezone)
+    if column["data_type"] in ("decimal", "wei"):
+        default_scale = 9 if column["data_type"] == "decimal" else 0
+        return pa.decimal128(column.get("precision", 38), column.get("scale", default_scale))
+    return ARROW_TYPES[column["data_type"]]
+
+
+def align_to_table_schema(parquet_file_path: str, table: TTableSchema) -> str | None:
+    """The server appends by exact column match, but a file written before dlt evolved the
+    load's schema can be narrower than the table, which is built from the load-level union.
+    Returns the path of a padded copy, or None when the file already matches and can be
+    posted verbatim."""
+    if pq.read_schema(parquet_file_path).names == list(table["columns"]):
+        return None
+    data = pq.read_table(parquet_file_path)
+    aligned = pa.table(
+        {
+            name: data.column(name)
+            if name in data.column_names
+            else pa.nulls(data.num_rows, type=arrow_type(column))
+            for name, column in table["columns"].items()
+        }
+    )
+    handle, aligned_path = tempfile.mkstemp(suffix=".parquet")
+    os.close(handle)
+    pq.write_table(aligned, aligned_path)
+    return aligned_path
+
+
 def create_table(
     base_url: str, auth: tuple[str, str], catalog: str, dataset_name: str, table: TTableSchema
 ) -> None:
@@ -238,15 +285,20 @@ def altertable(
         endpoint = "upload"
         params["mode"] = mode
 
-    with open(parquet_file_path, "rb") as parquet_file:
-        response = requests.post(
-            f"{base_url}/{endpoint}",
-            params=params,
-            data=ChunkedFileReader(parquet_file),
-            auth=auth,
-            headers={"Content-Type": "application/parquet"},
-            timeout=UPLOAD_TIMEOUT,
-        )
+    aligned_path = align_to_table_schema(parquet_file_path, table)
+    try:
+        with open(aligned_path or parquet_file_path, "rb") as parquet_file:
+            response = requests.post(
+                f"{base_url}/{endpoint}",
+                params=params,
+                data=ChunkedFileReader(parquet_file),
+                auth=auth,
+                headers={"Content-Type": "application/parquet"},
+                timeout=UPLOAD_TIMEOUT,
+            )
+    finally:
+        if aligned_path:
+            os.unlink(aligned_path)
     raise_for_failure(response, f"loading {catalog}.{dataset_name}.{table['name']}")
 
     if mode == "overwrite":
