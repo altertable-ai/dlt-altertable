@@ -5,9 +5,12 @@ from typing import Any
 import requests
 from dlt.common.destination.exceptions import DestinationTerminalException
 
+from dlt_altertable.configuration import AltertableClientConfiguration
+
 UPLOAD_TIMEOUT = (30, 3600)
 QUERY_TIMEOUT = (10, 300)
 UPLOAD_BLOCK_BYTES = 1 << 20
+LOADER_WORKERS = 20
 TERMINAL_STATUSES = {
     HTTPStatus.BAD_REQUEST,
     HTTPStatus.UNAUTHORIZED,
@@ -28,7 +31,7 @@ class LargeBlockAdapter(requests.adapters.HTTPAdapter):
 
 def make_session() -> requests.Session:
     http_session = requests.Session()
-    adapter = LargeBlockAdapter()
+    adapter = LargeBlockAdapter(pool_maxsize=LOADER_WORKERS)
     http_session.mount("http://", adapter)
     http_session.mount("https://", adapter)
     return http_session
@@ -46,11 +49,11 @@ def raise_for_failure(response: requests.Response, action: str) -> None:
     raise RuntimeError(detail)
 
 
-def execute_sql(base_url: str, auth: tuple[str, str], statement: str) -> list[list]:
+def execute_sql(config: AltertableClientConfiguration, statement: str) -> list[list]:
     response = session.post(
-        f"{base_url}/query",
+        f"{config.base_url}/query",
         json={"statement": statement, "ephemeral": True, "compute_size": "XS"},
-        auth=auth,
+        auth=config.basic_auth,
         timeout=QUERY_TIMEOUT,
     )
     raise_for_failure(response, f"query {statement!r}")
@@ -62,8 +65,7 @@ def execute_sql(base_url: str, auth: tuple[str, str], statement: str) -> list[li
 
 
 def post_parquet(
-    base_url: str,
-    auth: tuple[str, str],
+    config: AltertableClientConfiguration,
     endpoint: str,
     params: dict[str, str],
     parquet_file_path: str,
@@ -71,10 +73,10 @@ def post_parquet(
 ) -> None:
     with open(parquet_file_path, "rb") as parquet_file:
         response = session.post(
-            f"{base_url}/{endpoint}",
+            f"{config.base_url}/{endpoint}",
             params=params,
             data=parquet_file,
-            auth=auth,
+            auth=config.basic_auth,
             headers={"Content-Type": "application/parquet"},
             timeout=UPLOAD_TIMEOUT,
         )

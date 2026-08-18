@@ -10,23 +10,12 @@ import pytest
 from dlt.pipeline.exceptions import PipelineStepFailed
 
 from dlt_altertable import altertable
-from tests.conftest import FakeServer, RecordedRequest
+from tests.conftest import DESTINATION_OPTIONS, FakeServer, RecordedRequest
 
 CONTACTS = [
     {"id": 1, "email": "ada@example.com", "lastmodifieddate": 10},
     {"id": 2, "email": "grace@example.com", "lastmodifieddate": 20},
 ]
-
-DESTINATION_OPTIONS = {
-    "host": "flight.test",
-    "catalog": "lakehouse",
-    "dataset_name": "raw",
-    "username": "user",
-    "password": "secret",
-    "port": 15002,
-    "tls": False,
-}
-
 
 def without_lineage(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
@@ -299,7 +288,7 @@ def test_explicit_arguments_beat_environment_variables(
 
     run_pipeline(appended_events())
 
-    assert server.uploads_for("events")[0].url.startswith("http://flight.test:15002")
+    assert server.uploads_for("events")[0].url.startswith("http://altertable.test:15002")
 
 
 def test_destination_is_configurable_from_the_environment(

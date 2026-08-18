@@ -1,12 +1,17 @@
 import os
 import tempfile
 
-import pyarrow as pa
 import pyarrow.parquet as pq
+from dlt.common.configuration.container import Container
+from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
+from dlt.common.destination.capabilities import DestinationCapabilitiesContext
+from dlt.common.libs.pyarrow import normalize_py_arrow_item
+from dlt.common.normalizers.naming.direct import NamingConvention
 from dlt.common.schema import TTableSchema
 from dlt.common.schema.typing import TColumnSchema
 
 from dlt_altertable.api import execute_sql
+from dlt_altertable.configuration import AltertableClientConfiguration
 
 SQL_TYPES = {
     "text": "VARCHAR",
@@ -22,17 +27,6 @@ SQL_TYPES = {
     "wei": "DECIMAL(38,0)",
 }
 
-ARROW_TYPES = {
-    "text": pa.string(),
-    "bigint": pa.int64(),
-    "double": pa.float64(),
-    "bool": pa.bool_(),
-    "date": pa.date32(),
-    "time": pa.time64("us"),
-    "json": pa.string(),
-    "binary": pa.binary(),
-}
-
 
 def sql_type(column: TColumnSchema) -> str:
     if column["data_type"] == "decimal" and (precision := column.get("precision")) is not None:
@@ -42,55 +36,60 @@ def sql_type(column: TColumnSchema) -> str:
     return SQL_TYPES[column["data_type"]]
 
 
-def arrow_type(column: TColumnSchema) -> pa.DataType:
-    if column["data_type"] == "timestamp":
-        timezone = None if column.get("timezone") is False else "UTC"
-        return pa.timestamp("us", tz=timezone)
-    if column["data_type"] in ("decimal", "wei"):
-        default_scale = 9 if column["data_type"] == "decimal" else 0
-        return pa.decimal128(column.get("precision", 38), column.get("scale", default_scale))
-    return ARROW_TYPES[column["data_type"]]
+def destination_capabilities() -> DestinationCapabilitiesContext:
+    try:
+        return Container()[DestinationCapabilitiesContext]
+    except Exception:
+        return DestinationCapabilitiesContext.generic_capabilities()
 
 
-def create_table(
-    base_url: str, auth: tuple[str, str], catalog: str, dataset_name: str, table: TTableSchema
-) -> None:
-    columns = ", ".join(f'"{name}" {sql_type(column)}' for name, column in table["columns"].items())
-    execute_sql(base_url, auth, f'CREATE SCHEMA IF NOT EXISTS "{catalog}"."{dataset_name}"')
-    execute_sql(
-        base_url,
-        auth,
-        f'CREATE TABLE IF NOT EXISTS "{catalog}"."{dataset_name}"."{table["name"]}" ({columns})',
+def qualified_table_name(config: AltertableClientConfiguration, table_name: str) -> str:
+    return ".".join(
+        escape_postgres_identifier(part)
+        for part in (config.catalog, config.dataset_name, table_name)
     )
 
 
-def create_or_evolve_table(
-    base_url: str, auth: tuple[str, str], catalog: str, dataset_name: str, table: TTableSchema
-) -> bool:
-    """Neither append nor upsert creates its target: the server fails an append on a missing table
-    and runs an upsert as a MERGE, so the destination owns creation. A table left by an earlier
-    load must also gain the columns that dlt's schema evolution added since.
+def create_table(config: AltertableClientConfiguration, table: TTableSchema) -> None:
+    columns = ", ".join(
+        f"{escape_postgres_identifier(name)} {sql_type(column)}"
+        for name, column in table["columns"].items()
+    )
+    execute_sql(
+        config,
+        "CREATE SCHEMA IF NOT EXISTS "
+        f"{escape_postgres_identifier(config.catalog)}"
+        f".{escape_postgres_identifier(config.dataset_name)}",
+    )
+    execute_sql(
+        config,
+        f"CREATE TABLE IF NOT EXISTS {qualified_table_name(config, table['name'])} ({columns})",
+    )
+
+
+def create_or_evolve_table(config: AltertableClientConfiguration, table: TTableSchema) -> bool:
+    """Neither append nor upsert creates its target, so the destination owns creation. A table
+    left by an earlier load must also gain the columns that dlt's schema evolution added since.
 
     Returns whether the table already existed: a table just created from this file's schema must
     not be cached as evolved, because a later file of the same load may carry new columns."""
     rows = execute_sql(
-        base_url,
-        auth,
+        config,
         "SELECT column_name FROM information_schema.columns "
-        f"WHERE table_catalog = '{catalog}' AND table_schema = '{dataset_name}' "
-        f"AND table_name = '{table['name']}'",
+        f"WHERE table_catalog = {escape_duckdb_literal(config.catalog)} "
+        f"AND table_schema = {escape_duckdb_literal(config.dataset_name)} "
+        f"AND table_name = {escape_duckdb_literal(table['name'])}",
     )
     existing = {row[0] for row in rows}
     if not existing:
-        create_table(base_url, auth, catalog, dataset_name, table)
+        create_table(config, table)
         return False
     for name, column in table["columns"].items():
         if name not in existing:
             execute_sql(
-                base_url,
-                auth,
-                f'ALTER TABLE "{catalog}"."{dataset_name}"."{table["name"]}" '
-                f'ADD COLUMN IF NOT EXISTS "{name}" {sql_type(column)}',
+                config,
+                f"ALTER TABLE {qualified_table_name(config, table['name'])} "
+                f"ADD COLUMN IF NOT EXISTS {escape_postgres_identifier(name)} {sql_type(column)}",
             )
     return True
 
@@ -101,14 +100,11 @@ def align_to_table_schema(parquet_file_path: str, table: TTableSchema) -> str | 
     columns, or None when the file already matches and is posted verbatim."""
     if pq.read_schema(parquet_file_path).names == list(table["columns"]):
         return None
-    data = pq.read_table(parquet_file_path)
-    aligned = pa.table(
-        {
-            name: data.column(name)
-            if name in data.column_names
-            else pa.nulls(data.num_rows, type=arrow_type(column))
-            for name, column in table["columns"].items()
-        }
+    aligned = normalize_py_arrow_item(
+        pq.read_table(parquet_file_path),
+        table["columns"],
+        NamingConvention(),
+        destination_capabilities(),
     )
     handle, aligned_path = tempfile.mkstemp(suffix=".parquet")
     os.close(handle)

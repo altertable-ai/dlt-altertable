@@ -7,31 +7,21 @@ from dlt.common.schema import TTableSchema
 
 import dlt_altertable.destination
 from dlt_altertable import altertable
-from tests.conftest import FakeServer
+from dlt_altertable.configuration import AltertableClientConfiguration
+from tests.conftest import BASE_URL, FakeServer, make_config
 
 sink = altertable.__wrapped__
 
-DESTINATION_OPTIONS = {
-    "host": "flight.test",
-    "catalog": "lakehouse",
-    "dataset_name": "raw",
-    "username": "user",
-    "password": "secret",
-    "port": 15002,
-    "tls": False,
-}
-
-BASE_URL = "http://flight.test:15002"
-
 ALTERTABLE_ENVIRONMENT = {
-    "ALTERTABLE_HOST": "flight.sandbox",
+    "ALTERTABLE_HOST": "altertable.env",
     "ALTERTABLE_CATALOG": "lakehouse",
     "ALTERTABLE_SCHEMA": "crm",
-    "ALTERTABLE_USERNAME": "sandbox",
-    "ALTERTABLE_PASSWORD": "sandbox-secret",
+    "ALTERTABLE_USERNAME": "env-user",
+    "ALTERTABLE_PASSWORD": "env-secret",
     "ALTERTABLE_PORT": "15002",
     "ALTERTABLE_TLS": "false",
 }
+
 
 
 def table_schema(name: str, write_disposition: str, **hints: Any) -> TTableSchema:
@@ -96,7 +86,7 @@ def test_write_disposition_selects_upload_mode(
     write_disposition: str,
     expected_mode: str,
 ) -> None:
-    sink(write_parquet(rows), table_schema("contacts", write_disposition), **DESTINATION_OPTIONS)
+    sink(write_parquet(rows), table_schema("contacts", write_disposition), config=make_config())
 
     upload = server.uploads[0]
     assert upload.endpoint == "upload"
@@ -113,7 +103,7 @@ def test_replace_only_replaces_the_first_file_of_a_load(
         sink(
             write_parquet(rows, f"part{part}"),
             table_schema("deals", "replace"),
-            **DESTINATION_OPTIONS,
+            config=make_config(),
         )
 
     assert [upload.params["mode"] for upload in server.uploads] == [
@@ -128,8 +118,8 @@ def test_replace_only_replaces_the_first_file_of_a_load(
 def test_replace_bookkeeping_is_per_table(
     server: FakeServer, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
-    sink(write_parquet(rows, "a"), table_schema("contacts", "replace"), **DESTINATION_OPTIONS)
-    sink(write_parquet(rows, "b"), table_schema("deals", "replace"), **DESTINATION_OPTIONS)
+    sink(write_parquet(rows, "a"), table_schema("contacts", "replace"), config=make_config())
+    sink(write_parquet(rows, "b"), table_schema("deals", "replace"), config=make_config())
 
     assert [upload.params["mode"] for upload in server.uploads] == ["overwrite", "overwrite"]
 
@@ -142,7 +132,7 @@ def test_merge_with_dedup_sort_becomes_the_server_cursor(
         with_primary_key(table_schema("contacts", "merge"), "id"), "lastmodifieddate"
     )
 
-    sink(write_parquet(rows), table, **DESTINATION_OPTIONS)
+    sink(write_parquet(rows), table, config=make_config())
 
     upload = server.uploads[0]
     assert upload.endpoint == "upsert"
@@ -156,7 +146,7 @@ def test_merge_without_dedup_sort_upserts_on_primary_key_alone(
 ) -> None:
     table = with_primary_key(table_schema("contacts", "merge"), "id", "lastmodifieddate")
 
-    sink(write_parquet(rows), table, **DESTINATION_OPTIONS)
+    sink(write_parquet(rows), table, config=make_config())
 
     upload = server.uploads[0]
     assert upload.endpoint == "upsert"
@@ -188,7 +178,7 @@ def test_unsupported_merge_configurations_are_terminal(
     unsupported: str,
 ) -> None:
     with pytest.raises(DestinationTerminalException) as failure:
-        sink(write_parquet(rows), table, **DESTINATION_OPTIONS)
+        sink(write_parquet(rows), table, config=make_config())
 
     assert f"Table {table['name']}: {unsupported}" in str(failure.value)
     assert server.uploads == []
@@ -203,7 +193,7 @@ def test_merge_with_hard_delete_hint_is_terminal(
     table["columns"]["deleted"] = {"name": "deleted", "data_type": "bool", "hard_delete": True}
 
     with pytest.raises(DestinationTerminalException) as failure:
-        sink(write_parquet(rows), table, **DESTINATION_OPTIONS)
+        sink(write_parquet(rows), table, config=make_config())
 
     assert "hard_delete" in str(failure.value)
     assert server.uploads == []
@@ -217,7 +207,7 @@ def test_append_ignores_primary_key_and_dedup_sort_hints(
         with_primary_key(table_schema("contacts", "append"), "id"), "lastmodifieddate"
     )
 
-    sink(write_parquet(rows), table, **DESTINATION_OPTIONS)
+    sink(write_parquet(rows), table, config=make_config())
 
     upload = server.uploads[0]
     assert upload.endpoint == "upload"
@@ -230,7 +220,7 @@ def test_schema_evolution_adds_new_columns_before_the_upload(
 ) -> None:
     server.existing_columns = ["id"]
 
-    sink(write_parquet(rows), table_schema("contacts", "append"), **DESTINATION_OPTIONS)
+    sink(write_parquet(rows), table_schema("contacts", "append"), config=make_config())
 
     assert server.alters == [
         'ALTER TABLE "lakehouse"."raw"."contacts" '
@@ -243,7 +233,7 @@ def test_schema_evolution_adds_new_columns_before_the_upload(
 def test_new_tables_skip_schema_evolution(
     server: FakeServer, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
-    sink(write_parquet(rows), table_schema("contacts", "append"), **DESTINATION_OPTIONS)
+    sink(write_parquet(rows), table_schema("contacts", "append"), config=make_config())
 
     assert len(server.schema_lookups) == 1
     assert server.alters == []
@@ -264,7 +254,7 @@ def test_a_missing_table_is_created_before_the_load(
 ) -> None:
     """The server fails an append on a missing table and runs an upsert as a MERGE, so neither
     disposition can rely on the load itself to create it."""
-    sink(write_parquet(rows), build_table(), **DESTINATION_OPTIONS)
+    sink(write_parquet(rows), build_table(), config=make_config())
 
     assert server.creates == [
         'CREATE SCHEMA IF NOT EXISTS "lakehouse"."raw"',
@@ -281,7 +271,7 @@ def test_an_existing_table_is_not_recreated(
 ) -> None:
     server.existing_columns = ["id", "lastmodifieddate"]
 
-    sink(write_parquet(rows), build_table(), **DESTINATION_OPTIONS)
+    sink(write_parquet(rows), build_table(), config=make_config())
 
     assert server.creates == []
     assert server.alters == []
@@ -291,7 +281,7 @@ def test_an_existing_table_is_not_recreated(
 def test_replace_skips_the_column_lookup(
     server: FakeServer, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
-    sink(write_parquet(rows), table_schema("contacts", "replace"), **DESTINATION_OPTIONS)
+    sink(write_parquet(rows), table_schema("contacts", "replace"), config=make_config())
 
     assert server.statements == []
 
@@ -305,8 +295,8 @@ def test_schema_lookup_runs_once_per_existing_table_per_load(
 ) -> None:
     server.existing_columns = ["id", "lastmodifieddate"]
 
-    sink(write_parquet(rows, "a"), table_schema("contacts", "append"), **DESTINATION_OPTIONS)
-    sink(write_parquet(rows, "b"), table_schema("contacts", "append"), **DESTINATION_OPTIONS)
+    sink(write_parquet(rows, "a"), table_schema("contacts", "append"), config=make_config())
+    sink(write_parquet(rows, "b"), table_schema("contacts", "append"), config=make_config())
 
     assert len(server.schema_lookups) == 1
     assert evolved_tables == ["contacts"]
@@ -319,14 +309,14 @@ def test_a_created_table_is_not_cached_as_evolved(
     replaced_tables: list[str],
 ) -> None:
     narrow_file = write_parquet([{"id": 1}], "narrow")
-    sink(narrow_file, table_schema("contacts", "append"), **DESTINATION_OPTIONS)
+    sink(narrow_file, table_schema("contacts", "append"), config=make_config())
 
     assert any(statement.startswith("CREATE TABLE") for statement in server.statements)
     assert evolved_tables == []
 
     server.existing_columns = ["id"]
     wide_file = write_parquet([{"id": 2, "lastmodifieddate": 20}], "wide")
-    sink(wide_file, table_schema("contacts", "append"), **DESTINATION_OPTIONS)
+    sink(wide_file, table_schema("contacts", "append"), config=make_config())
 
     assert any("lastmodifieddate" in statement for statement in server.alters)
     assert evolved_tables == ["contacts"]
@@ -338,7 +328,7 @@ def test_narrower_files_are_padded_to_the_table_schema(
 ) -> None:
     narrow_file = write_parquet([{"id": 1}])
 
-    sink(narrow_file, table_schema("contacts", "append"), **DESTINATION_OPTIONS)
+    sink(narrow_file, table_schema("contacts", "append"), config=make_config())
 
     upload = server.uploads[0]
     assert upload.schema.names == ["id", "lastmodifieddate"]
@@ -357,7 +347,7 @@ def test_comma_in_key_columns_is_terminal(
     }
 
     with pytest.raises(DestinationTerminalException) as failure:
-        sink(write_parquet(rows), table, **DESTINATION_OPTIONS)
+        sink(write_parquet(rows), table, config=make_config())
 
     assert "comma" in str(failure.value)
     assert server.uploads == []
@@ -377,7 +367,7 @@ def test_wrong_credentials_fail_terminally(
     server.unauthenticated = True
 
     with pytest.raises(DestinationTerminalException) as failure:
-        sink(write_parquet(rows), table_schema("contacts", "append"), **DESTINATION_OPTIONS)
+        sink(write_parquet(rows), table_schema("contacts", "append"), config=make_config())
 
     assert "401" in str(failure.value)
     assert server.uploads == []
@@ -390,7 +380,7 @@ def test_server_failures_are_transient_and_name_the_load_target(
     server.transient_upload_failures = 1
 
     with pytest.raises(RuntimeError) as failure:
-        sink(write_parquet(rows), table_schema("contacts", "append"), **DESTINATION_OPTIONS)
+        sink(write_parquet(rows), table_schema("contacts", "append"), config=make_config())
 
     assert "lakehouse.raw.contacts" in str(failure.value)
     assert "503" in str(failure.value)
@@ -403,7 +393,7 @@ def test_query_stream_errors_are_transient(
     server.query_error = "worker lease expired"
 
     with pytest.raises(RuntimeError) as failure:
-        sink(write_parquet(rows), table_schema("contacts", "append"), **DESTINATION_OPTIONS)
+        sink(write_parquet(rows), table_schema("contacts", "append"), config=make_config())
 
     assert "worker lease expired" in str(failure.value)
     assert server.uploads == []
@@ -415,7 +405,7 @@ def test_the_parquet_file_is_posted_verbatim(
 ) -> None:
     path = write_parquet(rows)
 
-    sink(path, table_schema("contacts", "append"), **DESTINATION_OPTIONS)
+    sink(path, table_schema("contacts", "append"), config=make_config())
 
     upload = server.uploads[0]
     assert upload.url == f"{BASE_URL}/upload"
@@ -433,7 +423,7 @@ def test_empty_parquet_file_is_still_uploaded(server: FakeServer, tmp_path) -> N
     path = tmp_path / "empty.parquet"
     pq.write_table(pa.table({"id": pa.array([], type=pa.int64())}), path)
 
-    sink(str(path), table_schema("contacts", "replace"), **DESTINATION_OPTIONS)
+    sink(str(path), table_schema("contacts", "replace"), config=make_config())
 
     upload = server.uploads[0]
     assert upload.rows == []
@@ -444,40 +434,34 @@ def test_empty_parquet_file_is_still_uploaded(server: FakeServer, tmp_path) -> N
 def test_connection_parameters_reach_the_request(
     server: FakeServer, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
-    sink(write_parquet(rows), table_schema("contacts", "append"), **DESTINATION_OPTIONS)
+    sink(write_parquet(rows), table_schema("contacts", "append"), config=make_config())
 
     upload = server.uploads[0]
     assert upload.url.startswith(BASE_URL)
     assert upload.auth == ("user", "secret")
 
 
-@pytest.mark.usefixtures("replaced_tables")
-def test_connection_falls_back_to_the_altertable_environment_variables(
-    server: FakeServer,
-    write_parquet,
-    rows: list[dict[str, Any]],
+def test_configuration_falls_back_to_the_altertable_environment_variables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for variable, value in ALTERTABLE_ENVIRONMENT.items():
         monkeypatch.setenv(variable, value)
 
-    sink(write_parquet(rows), table_schema("contacts", "append"))
+    config = AltertableClientConfiguration()
+    config.on_resolved()
 
-    upload = server.uploads[0]
-    assert upload.url == "http://flight.sandbox:15002/upload"
-    assert upload.auth == ("sandbox", "sandbox-secret")
-    assert upload.params["catalog"] == "lakehouse"
-    assert upload.params["schema"] == "crm"
+    assert config.base_url == "http://altertable.env:15002"
+    assert config.basic_auth == ("env-user", "env-secret")
+    assert config.catalog == "lakehouse"
+    assert config.dataset_name == "crm"
 
 
-@pytest.mark.usefixtures("replaced_tables")
-def test_missing_configuration_is_terminal_and_names_every_surface(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
-) -> None:
+def test_missing_configuration_is_terminal_and_names_every_surface() -> None:
+    config = AltertableClientConfiguration()
+
     with pytest.raises(DestinationTerminalException) as failure:
-        sink(write_parquet(rows), table_schema("contacts", "append"))
+        config.on_resolved()
 
     assert "host is not configured" in str(failure.value)
     assert "destination.altertable.host" in str(failure.value)
     assert "ALTERTABLE_HOST" in str(failure.value)
-    assert server.uploads == []

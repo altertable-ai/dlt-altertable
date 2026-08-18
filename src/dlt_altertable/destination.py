@@ -8,7 +8,6 @@ from dlt.common.schema.utils import (
     get_dedup_sort_tuple,
     has_column_with_prop,
 )
-from dlt.common.typing import TSecretStrValue
 
 from dlt_altertable.api import post_parquet
 from dlt_altertable.configuration import AltertableClientConfiguration
@@ -17,11 +16,6 @@ from dlt_altertable.table_schema import align_to_table_schema, create_or_evolve_
 
 def primary_key_columns(table: TTableSchema) -> list[str]:
     return get_columns_names_with_prop(table, "primary_key")
-
-
-def dedup_sort_column(table: TTableSchema) -> str | None:
-    dedup_sort = get_dedup_sort_tuple(table)
-    return dedup_sort[0] if dedup_sort else None
 
 
 def unsupported_merge_configuration(table: TTableSchema) -> str | None:
@@ -48,7 +42,8 @@ def upsert_params(table: TTableSchema) -> dict[str, str] | None:
             f"Table {table['name']}: {unsupported} is not supported by the Altertable "
             "destination, which runs merge as a server-side upsert on the primary_key."
         )
-    cursor = dedup_sort_column(table)
+    dedup_sort = get_dedup_sort_tuple(table)
+    cursor = dedup_sort[0] if dedup_sort else None
     key_columns = [*primary_key_columns(table), *([cursor] if cursor else [])]
     if invalid := [column for column in key_columns if "," in column]:
         raise DestinationTerminalException(
@@ -88,28 +83,8 @@ def evolved_tables() -> list[str]:
 def altertable(
     parquet_file_path: str,
     table: TTableSchema,
-    host: str | None = None,
-    catalog: str | None = None,
-    dataset_name: str | None = None,
-    username: str | None = None,
-    password: TSecretStrValue | None = None,
-    port: int | None = None,
-    tls: bool | None = None,
+    config: AltertableClientConfiguration = None,
 ) -> None:
-    config = AltertableClientConfiguration(
-        host=host,
-        catalog=catalog,
-        dataset_name=dataset_name,
-        username=username,
-        password=password,
-        port=port,
-        tls=tls,
-    )
-    config.on_resolved()
-    catalog = config.catalog
-    dataset_name = config.dataset_name
-    base_url = config.base_url
-    auth = config.basic_auth
     upsert = upsert_params(table)
 
     already_replaced = replaced_tables()
@@ -117,10 +92,10 @@ def altertable(
     mode = upload_mode(table, table["name"] in already_replaced)
 
     if mode != "overwrite" and table["name"] not in already_evolved:
-        if create_or_evolve_table(base_url, auth, catalog, dataset_name, table):
+        if create_or_evolve_table(config, table):
             already_evolved.append(table["name"])
 
-    params = {"catalog": catalog, "schema": dataset_name, "table": table["name"]}
+    params = {"catalog": config.catalog, "schema": config.dataset_name, "table": table["name"]}
     if upsert is not None:
         endpoint = "upsert"
         params |= upsert
@@ -131,12 +106,11 @@ def altertable(
     aligned_path = align_to_table_schema(parquet_file_path, table)
     try:
         post_parquet(
-            base_url,
-            auth,
+            config,
             endpoint,
             params,
             aligned_path or parquet_file_path,
-            f"loading {catalog}.{dataset_name}.{table['name']}",
+            f"loading {config.catalog}.{config.dataset_name}.{table['name']}",
         )
     finally:
         if aligned_path:
