@@ -106,10 +106,10 @@ dlt's batch-only deduplication. Without the hint, which row wins is up to the se
 
 ## dlt system columns and tables
 
-Like dlt's SQL destinations, this destination loads dlt's lineage columns and system tables:
-every row carries `_dlt_id` and `_dlt_load_id`, and the dataset gains `_dlt_loads`,
-`_dlt_version` and `_dlt_pipeline_state` tables. They make every row traceable to the load that
-produced it.
+Like dlt's SQL destinations, this destination loads dlt's lineage columns: every row carries
+`_dlt_id` and `_dlt_load_id`, making it traceable to the load that produced it. The dataset also
+gains a `_dlt_pipeline_state` table. dlt maintains `_dlt_loads` and `_dlt_version` only inside
+SQL destinations, so those tables do not appear here.
 
 ## Schema evolution
 
