@@ -109,7 +109,7 @@ def test_each_file_becomes_one_post(recorder: HttpRecorder, run_pipeline) -> Non
 
     uploads = recorder.uploads_for("events")
     assert len(uploads) == 1
-    assert uploads[0].params["mode"] == "create_append"
+    assert uploads[0].params["mode"] == "append"
 
 
 def test_replace_recreates_the_table_on_every_load(recorder: HttpRecorder, run_pipeline) -> None:
@@ -247,7 +247,7 @@ def test_multiple_resources_load_with_their_own_dispositions(
 
     assert recorder.uploads_for("contacts")[0].endpoint == "upsert"
     assert recorder.uploads_for("deals")[0].params["mode"] == "overwrite"
-    assert recorder.uploads_for("events")[0].params["mode"] == "create_append"
+    assert recorder.uploads_for("events")[0].params["mode"] == "append"
     assert without_lineage(recorder.uploads_for("contacts")[0].rows) == CONTACTS
 
 

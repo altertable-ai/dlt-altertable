@@ -62,6 +62,10 @@ class HttpRecorder:
     def alters(self) -> list[str]:
         return [statement for statement in self.statements if statement.startswith("ALTER")]
 
+    @property
+    def creates(self) -> list[str]:
+        return [statement for statement in self.statements if statement.startswith("CREATE")]
+
 
 def recording_post(recorder: HttpRecorder):
     def post(

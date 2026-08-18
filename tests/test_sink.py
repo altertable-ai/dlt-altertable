@@ -85,7 +85,7 @@ def rows() -> list[dict[str, Any]]:
 @pytest.mark.parametrize(
     ("write_disposition", "expected_mode"),
     [
-        ("append", "create_append"),
+        ("append", "append"),
         ("replace", "overwrite"),
     ],
 )
@@ -242,6 +242,44 @@ def test_new_tables_skip_schema_evolution(
     sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
 
     assert len(recorder.schema_lookups) == 1
+    assert recorder.alters == []
+
+
+def append_table() -> TTableSchema:
+    return table_schema("contacts", "append")
+
+
+def merge_table() -> TTableSchema:
+    return with_primary_key(table_schema("contacts", "merge"), "id")
+
+
+@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.parametrize("build_table", [append_table, merge_table], ids=["append", "merge"])
+def test_a_missing_table_is_created_before_the_load(
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]], build_table
+) -> None:
+    """The server fails an append on a missing table and runs an upsert as a MERGE, so neither
+    disposition can rely on the load itself to create it."""
+    sink(write_parquet(rows), build_table(), **CONNECTION)
+
+    assert recorder.creates == [
+        'CREATE SCHEMA IF NOT EXISTS "lakehouse"."raw"',
+        'CREATE TABLE IF NOT EXISTS "lakehouse"."raw"."contacts" '
+        '("id" BIGINT, "lastmodifieddate" BIGINT)',
+    ]
+    assert recorder.uploads[0].rows == rows
+
+
+@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.parametrize("build_table", [append_table, merge_table], ids=["append", "merge"])
+def test_an_existing_table_is_not_recreated(
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]], build_table
+) -> None:
+    recorder.existing_columns = ["id", "lastmodifieddate"]
+
+    sink(write_parquet(rows), build_table(), **CONNECTION)
+
+    assert recorder.creates == []
     assert recorder.alters == []
 
 

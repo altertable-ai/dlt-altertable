@@ -82,9 +82,9 @@ def merge_params(table: TTableSchema) -> dict[str, str] | None:
 
 
 def upload_mode(table: TTableSchema, table_already_replaced: bool) -> str:
-    if table.get("write_disposition") != "replace":
-        return "create_append"
-    return "append" if table_already_replaced else "overwrite"
+    if table.get("write_disposition") == "replace" and not table_already_replaced:
+        return "overwrite"
+    return "append"
 
 
 def tables_already_replaced() -> list[str]:
@@ -140,11 +140,24 @@ def sql_type(column: TColumnSchema) -> str:
     return SQL_TYPES[column["data_type"]]
 
 
-def add_new_columns(
+def create_table(
     base_url: str, auth: tuple[str, str], catalog: str, dataset_name: str, table: TTableSchema
 ) -> None:
-    """The server appends by exact column match, so a table created by an earlier load must first
-    gain the columns that dlt's schema evolution added since."""
+    columns = ", ".join(f'"{name}" {sql_type(column)}' for name, column in table["columns"].items())
+    execute_sql(base_url, auth, f'CREATE SCHEMA IF NOT EXISTS "{catalog}"."{dataset_name}"')
+    execute_sql(
+        base_url,
+        auth,
+        f'CREATE TABLE IF NOT EXISTS "{catalog}"."{dataset_name}"."{table["name"]}" ({columns})',
+    )
+
+
+def sync_table_schema(
+    base_url: str, auth: tuple[str, str], catalog: str, dataset_name: str, table: TTableSchema
+) -> None:
+    """Neither append nor upsert creates its target: the server fails an append on a missing table
+    and runs an upsert as a MERGE, so the destination owns creation. A table left by an earlier
+    load must also gain the columns that dlt's schema evolution added since."""
     rows = execute_sql(
         base_url,
         auth,
@@ -154,6 +167,7 @@ def add_new_columns(
     )
     existing = {row[0] for row in rows}
     if not existing:
+        create_table(base_url, auth, catalog, dataset_name, table)
         return
     for name, column in table["columns"].items():
         if name not in existing:
@@ -202,7 +216,7 @@ def altertable(
     mode = upload_mode(table, table["name"] in replaced_tables)
 
     if mode != "overwrite" and table["name"] not in evolved_tables:
-        add_new_columns(base_url, auth, catalog, dataset_name, table)
+        sync_table_schema(base_url, auth, catalog, dataset_name, table)
         evolved_tables.append(table["name"])
 
     params = {"catalog": catalog, "schema": dataset_name, "table": table["name"]}
