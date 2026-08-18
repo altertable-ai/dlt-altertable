@@ -31,15 +31,10 @@ class LargeBlockAdapter(HTTPAdapter):
         super().init_poolmanager(*args, **kwargs)
 
 
-def make_session() -> requests.Session:
-    http_session = requests.Session()
-    adapter = LargeBlockAdapter(pool_maxsize=LOADER_WORKERS)
-    http_session.mount("http://", adapter)
-    http_session.mount("https://", adapter)
-    return http_session
-
-
-session = make_session()
+session = requests.Session()
+_adapter = LargeBlockAdapter(pool_maxsize=LOADER_WORKERS)
+session.mount("http://", _adapter)
+session.mount("https://", _adapter)
 
 
 def raise_for_failure(response: requests.Response, action: str) -> None:
