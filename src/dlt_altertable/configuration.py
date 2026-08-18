@@ -1,8 +1,7 @@
 import os
 from typing import cast
 
-from dlt.common.configuration import configspec
-from dlt.common.destination.exceptions import DestinationTerminalException
+from dlt.common.configuration import ConfigurationValueError, configspec
 from dlt.common.typing import TSecretStrValue
 from dlt.destinations.impl.destination.configuration import CustomDestinationClientConfiguration
 
@@ -32,7 +31,7 @@ class AltertableClientConfiguration(CustomDestinationClientConfiguration):
         for parameter, env_var in ENV_FALLBACKS.items():
             value = getattr(self, parameter) or os.environ.get(env_var)
             if not value:
-                raise DestinationTerminalException(
+                raise ConfigurationValueError(
                     f"{parameter} is not configured: pass {parameter}= to altertable(), set "
                     f"destination.altertable.{parameter} in .dlt/secrets.toml, or export "
                     f"{env_var}."

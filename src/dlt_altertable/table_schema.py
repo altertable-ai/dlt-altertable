@@ -8,7 +8,7 @@ import pyarrow.parquet as pq
 from dlt.common import logger
 from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
 from dlt.common.destination.capabilities import DestinationCapabilitiesContext
-from dlt.common.destination.exceptions import DestinationTerminalException
+from dlt.common.exceptions import TerminalValueError
 from dlt.common.libs.pyarrow import normalize_py_arrow_item
 from dlt.common.normalizers.naming.direct import NamingConvention
 from dlt.common.schema import TTableSchema
@@ -33,8 +33,8 @@ SQL_TYPES = {
 
 def sql_type(column: TColumnSchema) -> str:
     if column["data_type"] == "wei":
-        raise DestinationTerminalException(
-            f"Column {column['name']} has type wei, which needs 76 digits while DuckDB "
+        raise TerminalValueError(
+            f"Column {column['name']} has type wei, which needs 78 digits while DuckDB "
             "decimals stop at 38."
         )
     if column["data_type"] == "decimal" and (precision := column.get("precision")) is not None:

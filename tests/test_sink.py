@@ -2,7 +2,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from dlt.common.configuration import ConfigurationValueError
 from dlt.common.destination.exceptions import DestinationTerminalException
+from dlt.common.exceptions import TerminalValueError
 from dlt.common.schema import TTableSchema
 
 import dlt_altertable.destination
@@ -345,7 +347,7 @@ def test_wei_columns_are_terminal(server: FakeServer, write_parquet) -> None:
     table = table_schema("transfers", "append")
     table["columns"]["value"] = {"name": "value", "data_type": "wei"}
 
-    with pytest.raises(DestinationTerminalException) as failure:
+    with pytest.raises(TerminalValueError) as failure:
         sink(write_parquet([{"id": 1}]), table, config=make_config())
 
     assert "wei" in str(failure.value)
@@ -476,7 +478,7 @@ def test_configuration_falls_back_to_the_altertable_environment_variables(
 def test_missing_configuration_is_terminal_and_names_every_surface() -> None:
     config = AltertableClientConfiguration()
 
-    with pytest.raises(DestinationTerminalException) as failure:
+    with pytest.raises(ConfigurationValueError) as failure:
         config.on_resolved()
 
     assert "host is not configured" in str(failure.value)
