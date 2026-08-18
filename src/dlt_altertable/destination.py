@@ -11,6 +11,7 @@ from dlt.common.schema.utils import (
     get_dedup_sort_tuple,
     has_column_with_prop,
 )
+from dlt.common.typing import TSecretStrValue
 
 MERGE_STRATEGY_HINT = "x-merge-strategy"
 
@@ -74,6 +75,12 @@ def merge_params(table: TTableSchema) -> dict[str, str] | None:
         raise DestinationTerminalException(
             f"Table {table['name']}: {unsupported} is not supported by the Altertable "
             "destination, which runs merge as a server-side upsert on the primary_key."
+        )
+    key_columns = [*primary_key_columns(table), *cursor_columns(table)]
+    if invalid := [column for column in key_columns if "," in column]:
+        raise DestinationTerminalException(
+            f"Table {table['name']}: column names {invalid} contain a comma, which the "
+            "comma-separated primary_key and cursor_field parameters cannot express."
         )
     params = {"primary_key": ",".join(primary_key_columns(table))}
     if cursor := cursor_columns(table):
@@ -154,10 +161,13 @@ def create_table(
 
 def sync_table_schema(
     base_url: str, auth: tuple[str, str], catalog: str, dataset_name: str, table: TTableSchema
-) -> None:
+) -> bool:
     """Neither append nor upsert creates its target: the server fails an append on a missing table
     and runs an upsert as a MERGE, so the destination owns creation. A table left by an earlier
-    load must also gain the columns that dlt's schema evolution added since."""
+    load must also gain the columns that dlt's schema evolution added since.
+
+    Returns whether the table already existed: a table just created from this file's schema must
+    not be cached as evolved, because a later file of the same load may carry new columns."""
     rows = execute_sql(
         base_url,
         auth,
@@ -168,7 +178,7 @@ def sync_table_schema(
     existing = {row[0] for row in rows}
     if not existing:
         create_table(base_url, auth, catalog, dataset_name, table)
-        return
+        return False
     for name, column in table["columns"].items():
         if name not in existing:
             execute_sql(
@@ -177,6 +187,7 @@ def sync_table_schema(
                 f'ALTER TABLE "{catalog}"."{dataset_name}"."{table["name"]}" '
                 f'ADD COLUMN IF NOT EXISTS "{name}" {sql_type(column)}',
             )
+    return True
 
 
 @dlt.destination(
@@ -195,7 +206,7 @@ def altertable(
     catalog: str | None = None,
     dataset_name: str | None = None,
     username: str | None = None,
-    password: str | None = None,
+    password: TSecretStrValue | None = None,
     port: int | None = None,
     tls: bool | None = None,
 ) -> None:
@@ -216,8 +227,8 @@ def altertable(
     mode = upload_mode(table, table["name"] in replaced_tables)
 
     if mode != "overwrite" and table["name"] not in evolved_tables:
-        sync_table_schema(base_url, auth, catalog, dataset_name, table)
-        evolved_tables.append(table["name"])
+        if sync_table_schema(base_url, auth, catalog, dataset_name, table):
+            evolved_tables.append(table["name"])
 
     params = {"catalog": catalog, "schema": dataset_name, "table": table["name"]}
     if upsert_params is not None:

@@ -292,18 +292,65 @@ def test_replace_skips_the_column_lookup(
     assert recorder.statements == []
 
 
-def test_schema_lookup_runs_once_per_table_per_load(
+def test_schema_lookup_runs_once_per_existing_table_per_load(
     recorder: HttpRecorder,
     write_parquet,
     rows: list[dict[str, Any]],
     evolved_tables: list[str],
     replaced_tables: list[str],
 ) -> None:
+    recorder.existing_columns = ["id", "lastmodifieddate"]
+
     sink(write_parquet(rows, "a"), table_schema("contacts", "append"), **CONNECTION)
     sink(write_parquet(rows, "b"), table_schema("contacts", "append"), **CONNECTION)
 
     assert len(recorder.schema_lookups) == 1
     assert evolved_tables == ["contacts"]
+
+
+def test_a_created_table_is_not_cached_as_evolved(
+    recorder: HttpRecorder,
+    write_parquet,
+    evolved_tables: list[str],
+    replaced_tables: list[str],
+) -> None:
+    narrow_file = write_parquet([{"id": 1}], "narrow")
+    sink(narrow_file, table_schema("contacts", "append"), **CONNECTION)
+
+    assert any(statement.startswith("CREATE TABLE") for statement in recorder.statements)
+    assert evolved_tables == []
+
+    recorder.existing_columns = ["id"]
+    wide_file = write_parquet([{"id": 2, "lastmodifieddate": 20}], "wide")
+    sink(wide_file, table_schema("contacts", "append"), **CONNECTION)
+
+    assert any("lastmodifieddate" in statement for statement in recorder.alters)
+    assert evolved_tables == ["contacts"]
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_comma_in_key_columns_is_terminal(
+    recorder: HttpRecorder, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    table = with_primary_key(table_schema("contacts", "merge"), "id")
+    table["columns"]["external,id"] = {
+        "name": "external,id",
+        "data_type": "bigint",
+        "primary_key": True,
+    }
+
+    with pytest.raises(DestinationTerminalException) as failure:
+        sink(write_parquet(rows), table, **CONNECTION)
+
+    assert "comma" in str(failure.value)
+    assert recorder.uploads == []
+
+
+def test_password_is_marked_as_a_secret() -> None:
+    from dlt.common.configuration.specs.base_configuration import is_secret_hint
+
+    fields = altertable().spec.get_resolvable_fields()
+    assert is_secret_hint(fields["password"])
 
 
 @pytest.mark.usefixtures("replaced_tables")
