@@ -10,5 +10,4 @@ dist/
 
 # dlt writes pipeline working state, load packages and credentials here
 .dlt/secrets.toml
-~/.dlt/
 *.duckdb
