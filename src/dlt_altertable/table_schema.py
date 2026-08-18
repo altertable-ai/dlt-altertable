@@ -96,10 +96,9 @@ def create_or_evolve_table(
 
 
 def align_to_table_schema(parquet_file_path: str, table: TTableSchema) -> str | None:
-    """The server appends by exact column match, but a file written before dlt evolved the
-    load's schema can be narrower than the table, which is built from the load-level union.
-    Returns the path of a padded copy, or None when the file already matches and can be
-    posted verbatim."""
+    """Uploads must match the table column for column, but a file written before dlt evolved
+    the load's schema can be narrower. Returns the path of a padded copy, or None when the
+    file already matches and is posted verbatim."""
     if pq.read_schema(parquet_file_path).names == list(table["columns"]):
         return None
     data = pq.read_table(parquet_file_path)
