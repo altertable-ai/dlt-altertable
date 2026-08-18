@@ -102,7 +102,13 @@ def recording_post(recorder: HttpRecorder):
                 recorder.transient_upload_failures -= 1
                 return FakeResponse(503, "no compute capacity")
 
-        body = data.read() if hasattr(data, "read") else data
+        if hasattr(data, "read"):
+            chunks = []
+            while chunk := data.read():
+                chunks.append(chunk)
+            body = b"".join(chunks)
+        else:
+            body = data
         recorder.uploads.append(
             RecordedRequest(
                 url=url,
