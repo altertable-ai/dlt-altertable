@@ -106,9 +106,8 @@ def tables_already_evolved() -> list[str]:
 
 
 class ChunkedFileReader:
-    """requests finds `len` and sends Content-Length instead of chunked encoding, and urllib3
-    sends whatever read() returns, so 1MiB reads bypass its 16KiB send loop (measured 31%
-    faster on loopback uploads)."""
+    """Streams a file to requests in 1MiB reads, bypassing urllib3's 16KiB send loop (measured
+    31% faster on loopback). Exposing `len` keeps the upload Content-Length framed."""
 
     def __init__(self, file) -> None:
         self.file = file
