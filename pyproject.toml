@@ -1,0 +1,48 @@
+[project]
+name = "dlt-altertable"
+version = "0.1.0"
+description = "dlt destination that loads into the Altertable lakehouse through its HTTP API"
+readme = "README.md"
+authors = [{ name = "Altertable", email = "hello@altertable.ai" }]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["dlt", "altertable", "lakehouse", "parquet"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+requires-python = ">=3.12"
+
+dependencies = [
+    "dlt[parquet]~=1.19",
+    "pyarrow>=15.0.0",
+    "requests>=2.26",
+    "urllib3>=2",
+]
+
+[project.urls]
+Homepage = "https://altertable.ai"
+Repository = "https://github.com/altertable-ai/dlt-altertable"
+Changelog = "https://github.com/altertable-ai/dlt-altertable/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = ["pytest~=8.4", "ruff~=0.14"]
+
+[build-system]
+requires = ["uv_build>=0.11.29,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-v", "--tb=short", "--strict-markers"]
