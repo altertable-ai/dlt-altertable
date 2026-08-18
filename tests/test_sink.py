@@ -57,7 +57,16 @@ def with_dedup_sort(table: TTableSchema, column: str, order: str = "desc") -> TT
 
 
 @pytest.fixture
-def replaced_tables(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+def evolved_tables(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    tables: list[str] = []
+    monkeypatch.setattr(
+        dlt_altertable.destination, "tables_already_evolved", lambda: tables, raising=True
+    )
+    return tables
+
+
+@pytest.fixture
+def replaced_tables(monkeypatch: pytest.MonkeyPatch, evolved_tables: list[str]) -> list[str]:
     """Stands in for the per-load-package state, which only exists inside a pipeline run."""
     tables: list[str] = []
     monkeypatch.setattr(
@@ -279,7 +288,7 @@ def test_flight_errors_name_the_load_target(
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_parquet_file_is_streamed_into_a_committed_transaction(
+def test_parquet_file_is_streamed_through_a_single_ingest(
     recorder: FlightRecorder, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
     sink(write_parquet(rows), table_schema("contacts", "append"), **CONNECTION)
@@ -289,13 +298,21 @@ def test_parquet_file_is_streamed_into_a_committed_transaction(
     assert ingest.schema.names == ["id", "lastmodifieddate"]
     assert ingest.catalog_name == "lakehouse"
     assert ingest.schema_name == "raw"
-    assert recorder.calls == [
-        "begin_transaction",
-        "ingest",
-        "close_writer",
-        "commit",
-        "close_client",
-    ]
+    assert recorder.calls == ["ingest", "close_writer", "close_client"]
+
+
+def test_schema_lookup_runs_once_per_table_per_load(
+    recorder: FlightRecorder,
+    write_parquet,
+    rows: list[dict[str, Any]],
+    evolved_tables: list[str],
+    replaced_tables: list[str],
+) -> None:
+    sink(write_parquet(rows, "a"), table_schema("contacts", "append"), **CONNECTION)
+    sink(write_parquet(rows, "b"), table_schema("contacts", "append"), **CONNECTION)
+
+    assert len(recorder.queries) == 1
+    assert evolved_tables == ["contacts"]
 
 
 @pytest.mark.usefixtures("replaced_tables")

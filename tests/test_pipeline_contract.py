@@ -90,18 +90,12 @@ def test_dlt_bookkeeping_columns_are_not_ingested(recorder: FlightRecorder, run_
     assert recorder.ingests[0].schema.names == ["id", "kind"]
 
 
-def test_each_file_is_ingested_in_its_own_transaction(
+def test_each_file_is_ingested_through_its_own_connection(
     recorder: FlightRecorder, run_pipeline
 ) -> None:
     run_pipeline(appended_events())
 
-    assert recorder.calls == [
-        "begin_transaction",
-        "ingest",
-        "close_writer",
-        "commit",
-        "close_client",
-    ]
+    assert recorder.calls == ["ingest", "close_writer", "close_client"]
 
 
 def test_replace_recreates_the_table_on_every_load(recorder: FlightRecorder, run_pipeline) -> None:
@@ -136,8 +130,6 @@ def test_replace_is_reissued_when_the_first_attempt_fails(
 
     assert recorder.calls.count("ingest") == 2, "expected dlt to retry the failed load job"
     assert [ingest.mode for ingest in recorder.ingests_for("deals")] == [IngestTableMode.REPLACE]
-    assert recorder.calls.count("rollback") == 1
-    assert recorder.calls.count("commit") == 1
 
 
 def test_transient_failures_exhaust_after_five_attempts(

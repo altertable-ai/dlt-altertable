@@ -72,17 +72,6 @@ class RecordingReader:
         return self._table
 
 
-class RecordingTransaction:
-    def __init__(self, recorder: FlightRecorder) -> None:
-        self._recorder = recorder
-
-    def __enter__(self) -> "RecordingTransaction":
-        return self
-
-    def __exit__(self, exc_type: object, *exc_info: object) -> None:
-        self._recorder.calls.append("rollback" if exc_type else "commit")
-
-
 def recording_client_class(recorder: FlightRecorder) -> type:
     class RecordingClient:
         def __init__(self, username: str, password: str, **connection: Any) -> None:
@@ -100,12 +89,6 @@ def recording_client_class(recorder: FlightRecorder) -> type:
             recorder.statements.append(sql)
             return 0
 
-        def begin_transaction(self) -> RecordingTransaction:
-            if recorder.unauthenticated:
-                raise FlightUnauthenticatedError("Authorization header must use Bearer scheme")
-            recorder.calls.append("begin_transaction")
-            return RecordingTransaction(recorder)
-
         def ingest(
             self,
             *,
@@ -115,7 +98,6 @@ def recording_client_class(recorder: FlightRecorder) -> type:
             catalog_name: str,
             mode: IngestTableMode,
             incremental_options: IngestIncrementalOptions | None,
-            transaction: RecordingTransaction,
         ) -> RecordingWriter:
             recorder.calls.append("ingest")
             if recorder.successes_before_transient_failures > 0:

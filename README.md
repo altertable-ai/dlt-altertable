@@ -7,7 +7,7 @@
 
 A [dlt](https://dlthub.com) destination that loads into the [Altertable](https://altertable.ai)
 lakehouse over Arrow Flight SQL. Each dlt load job is one parquet file, streamed as Arrow record
-batches into a single Flight transaction. Types pass through Arrow end to end: the parquet file
+batches through a single ingest statement. Types pass through Arrow end to end: the parquet file
 dlt writes is the schema the server sees.
 
 ## Install
@@ -116,9 +116,9 @@ Child tables would need the dlt linking columns this destination deliberately sk
 
 ## Atomicity and retries
 
-Each parquet file is ingested in its own Flight transaction: a file either lands fully or not at
-all. A load split across several files is not atomic as a whole, and the first file of a
-`replace` load recreates the table.
+Each parquet file is one ingest statement, applied atomically by the server: a file either lands
+fully or not at all. A load split across several files is not atomic as a whole, and the first
+file of a `replace` load recreates the table.
 
 Transient failures (network, server errors) are retried 5 times by dlt
 (`load.raise_on_max_retries`). Bad credentials and unsupported merge configurations fail

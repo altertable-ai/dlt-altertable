@@ -92,6 +92,10 @@ def tables_already_replaced() -> list[str]:
     return dlt.current.destination_state().setdefault("replaced_tables", [])
 
 
+def tables_already_evolved() -> list[str]:
+    return dlt.current.destination_state().setdefault("evolved_tables", [])
+
+
 def declared_columns(table: TTableSchema, parquet_schema: pa.Schema) -> list[str]:
     """dlt writes _dlt_id and _dlt_load_id into the parquet file even when it hides them from the
     table schema, so the file is the wrong source of truth for what belongs in the lakehouse."""
@@ -163,6 +167,7 @@ def altertable(
 
     options = incremental_options(table)
     replaced_tables = tables_already_replaced()
+    evolved_tables = tables_already_evolved()
     mode = ingest_mode(table, table["name"] in replaced_tables)
 
     try:
@@ -172,20 +177,17 @@ def altertable(
         ):
             columns = declared_columns(table, parquet_file.schema_arrow)
             arrow_schema = pa.schema([parquet_file.schema_arrow.field(name) for name in columns])
-            if mode is IngestTableMode.CREATE_APPEND:
+            if mode is IngestTableMode.CREATE_APPEND and table["name"] not in evolved_tables:
                 add_new_columns(client, catalog, dataset_name, table, columns)
-            with (
-                client.begin_transaction() as transaction,
-                client.ingest(
-                    table_name=table["name"],
-                    schema=arrow_schema,
-                    schema_name=dataset_name,
-                    catalog_name=catalog,
-                    mode=mode,
-                    incremental_options=options,
-                    transaction=transaction,
-                ) as writer,
-            ):
+                evolved_tables.append(table["name"])
+            with client.ingest(
+                table_name=table["name"],
+                schema=arrow_schema,
+                schema_name=dataset_name,
+                catalog_name=catalog,
+                mode=mode,
+                incremental_options=options,
+            ) as writer:
                 for batch in parquet_file.iter_batches(columns=columns):
                     writer.write(batch)
     except FlightUnauthenticatedError as error:
