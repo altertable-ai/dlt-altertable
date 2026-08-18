@@ -1,5 +1,3 @@
-import os
-
 import dlt
 from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.schema import TTableSchema
@@ -11,7 +9,7 @@ from dlt.common.schema.utils import (
 
 from dlt_altertable.api import post_parquet
 from dlt_altertable.configuration import AltertableClientConfiguration
-from dlt_altertable.table_schema import align_to_table_schema, create_or_evolve_table
+from dlt_altertable.table_schema import aligned_parquet, create_or_evolve_table
 
 
 def primary_key_columns(table: TTableSchema) -> list[str]:
@@ -103,18 +101,14 @@ def altertable(
         endpoint = "upload"
         params["mode"] = mode
 
-    aligned_path = align_to_table_schema(parquet_file_path, table)
-    try:
+    with aligned_parquet(parquet_file_path, table) as upload_path:
         post_parquet(
             config,
             endpoint,
             params,
-            aligned_path or parquet_file_path,
+            upload_path,
             f"loading {config.catalog}.{config.dataset_name}.{table['name']}",
         )
-    finally:
-        if aligned_path:
-            os.unlink(aligned_path)
 
     if mode == "overwrite":
         already_replaced.append(table["name"])

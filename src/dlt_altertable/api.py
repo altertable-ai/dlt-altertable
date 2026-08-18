@@ -43,7 +43,7 @@ session = make_session()
 def raise_for_failure(response: requests.Response, action: str) -> None:
     if response.status_code == HTTPStatus.OK:
         return
-    detail = f"{action} failed with HTTP {response.status_code}: {response.text.strip()}"
+    detail = f"{action} failed with HTTP {response.status_code}: {response.text.strip()[:2000]}"
     if response.status_code in TERMINAL_STATUSES:
         raise DestinationTerminalException(detail)
     raise RuntimeError(detail)

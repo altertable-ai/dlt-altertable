@@ -61,8 +61,8 @@ directly: `altertable(host=..., catalog=..., dataset_name=...)`.
 
 No configuration is needed in an environment that already exports the `ALTERTABLE_HOST`,
 `ALTERTABLE_PORT`, `ALTERTABLE_TLS`, `ALTERTABLE_USERNAME`, `ALTERTABLE_PASSWORD`,
-`ALTERTABLE_CATALOG` and `ALTERTABLE_SCHEMA` variables, as an Altertable sandbox does. The
-host must be the HTTP API host (`api.…`), not the Flight SQL endpoint.
+`ALTERTABLE_CATALOG` and `ALTERTABLE_SCHEMA` variables. The host must be the HTTP API host
+(`api.…`), not the Flight SQL endpoint.
 
 Two notes on naming:
 

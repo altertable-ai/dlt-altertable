@@ -1,7 +1,10 @@
 import os
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import pyarrow.parquet as pq
+from dlt.common import logger
 from dlt.common.configuration.container import Container
 from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
 from dlt.common.destination.capabilities import DestinationCapabilitiesContext
@@ -65,6 +68,10 @@ def create_table(config: AltertableClientConfiguration, table: TTableSchema) -> 
         config,
         f"CREATE TABLE IF NOT EXISTS {qualified_table_name(config, table['name'])} ({columns})",
     )
+    logger.info(
+        f"Created table {config.catalog}.{config.dataset_name}.{table['name']} "
+        f"with {len(table['columns'])} columns"
+    )
 
 
 def create_or_evolve_table(config: AltertableClientConfiguration, table: TTableSchema) -> bool:
@@ -91,15 +98,21 @@ def create_or_evolve_table(config: AltertableClientConfiguration, table: TTableS
                 f"ALTER TABLE {qualified_table_name(config, table['name'])} "
                 f"ADD COLUMN IF NOT EXISTS {escape_postgres_identifier(name)} {sql_type(column)}",
             )
+            logger.info(
+                f"Added column {name} to {config.catalog}.{config.dataset_name}.{table['name']}"
+            )
     return True
 
 
-def align_to_table_schema(parquet_file_path: str, table: TTableSchema) -> str | None:
-    """dlt can evolve the schema in the middle of a load, so an earlier file may carry fewer
-    columns than the table the load builds. Returns the path of a copy padded with typed NULL
-    columns, or None when the file already matches and is posted verbatim."""
+@contextmanager
+def aligned_parquet(parquet_file_path: str, table: TTableSchema) -> Iterator[str]:
+    """The server appends by exact column match, and dlt can evolve the schema in the middle of
+    a load, so an earlier file may carry fewer columns than the table the load builds. Yields
+    the file itself when it already matches, otherwise a temporary copy padded with typed NULL
+    columns. Deletable once the server appends by column name."""
     if pq.read_schema(parquet_file_path).names == list(table["columns"]):
-        return None
+        yield parquet_file_path
+        return
     aligned = normalize_py_arrow_item(
         pq.read_table(parquet_file_path),
         table["columns"],
@@ -109,4 +122,7 @@ def align_to_table_schema(parquet_file_path: str, table: TTableSchema) -> str | 
     handle, aligned_path = tempfile.mkstemp(suffix=".parquet")
     os.close(handle)
     pq.write_table(aligned, aligned_path)
-    return aligned_path
+    try:
+        yield aligned_path
+    finally:
+        os.unlink(aligned_path)
