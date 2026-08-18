@@ -22,7 +22,8 @@ TERMINAL_STATUSES = {
 
 
 class LargeBlockAdapter(requests.adapters.HTTPAdapter):
-    """Raises urllib3's small default blocksize so uploads stream in fewer, larger writes."""
+    """A load job posts a whole parquet file in one stream, and urllib3's default blocksize is
+    sized for ordinary requests, not for a file-sized body."""
 
     def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
         kwargs["blocksize"] = UPLOAD_BLOCK_BYTES

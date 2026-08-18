@@ -75,8 +75,8 @@ def create_or_evolve_table(config: AltertableClientConfiguration, table: TTableS
     """Neither append nor upsert creates its target, so the destination owns creation. A table
     left by an earlier load must also gain the columns that dlt's schema evolution added since.
 
-    Returns whether the table already existed: a table just created from this file's schema must
-    not be cached as evolved, because a later file of the same load may carry new columns."""
+    Returns whether the lookup found an existing table, the only answer worth caching for the
+    rest of the load: a CREATE is never read back to confirm what the table now holds."""
     rows = execute_sql(
         config,
         "SELECT column_name FROM information_schema.columns "
@@ -103,10 +103,10 @@ def create_or_evolve_table(config: AltertableClientConfiguration, table: TTableS
 
 @contextmanager
 def aligned_parquet(parquet_file_path: str, table: TTableSchema) -> Iterator[str]:
-    """The server appends by exact column match, and dlt can evolve the schema in the middle of
-    a load, so an earlier file may carry fewer columns than the table the load builds. Yields
-    the file itself when it already matches, otherwise a temporary copy padded with typed NULL
-    columns. Deletable once the server appends by column name."""
+    """dlt can evolve a load's schema between files, leaving an earlier file narrower than the
+    table the load builds, while an append or replace upload must match the table column for
+    column. A file that falls short is padded with typed NULL columns into a temporary copy.
+    Merge files never come through here, so columns a merge file omits keep their stored values."""
     if pq.read_schema(parquet_file_path).names == list(table["columns"]):
         yield parquet_file_path
         return
