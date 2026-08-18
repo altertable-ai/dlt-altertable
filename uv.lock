@@ -219,6 +219,7 @@ dependencies = [
     { name = "dlt", extra = ["parquet"] },
     { name = "pyarrow" },
     { name = "requests" },
+    { name = "urllib3" },
 ]
 
 [package.dev-dependencies]
@@ -232,6 +233,7 @@ requires-dist = [
     { name = "dlt", extras = ["parquet"], specifier = "~=1.19" },
     { name = "pyarrow", specifier = ">=15.0.0" },
     { name = "requests", specifier = ">=2.26" },
+    { name = "urllib3", specifier = ">=2" },
 ]
 
 [package.metadata.requires-dev]
