@@ -9,7 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-import dlt_altertable.destination
+import dlt_altertable.api
 
 
 @dataclass
@@ -138,8 +138,8 @@ def isolated_altertable_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def recorder(monkeypatch: pytest.MonkeyPatch) -> HttpRecorder:
     recorder = HttpRecorder()
     monkeypatch.setattr(
-        dlt_altertable.destination,
-        "requests",
+        dlt_altertable.api,
+        "session",
         SimpleNamespace(post=recording_post(recorder)),
         raising=True,
     )
