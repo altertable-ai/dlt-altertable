@@ -5,7 +5,7 @@ from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.typing import TSecretStrValue
 from dlt.destinations.impl.destination.configuration import CustomDestinationClientConfiguration
 
-REQUIRED_ENV_VARS = {
+ENV_FALLBACKS = {
     "host": "ALTERTABLE_HOST",
     "catalog": "ALTERTABLE_CATALOG",
     "dataset_name": "ALTERTABLE_SCHEMA",
@@ -28,7 +28,7 @@ class AltertableClientConfiguration(CustomDestinationClientConfiguration):
     tls: bool | None = None
 
     def on_resolved(self) -> None:
-        for parameter, env_var in REQUIRED_ENV_VARS.items():
+        for parameter, env_var in ENV_FALLBACKS.items():
             value = getattr(self, parameter) or os.environ.get(env_var)
             if not value:
                 raise DestinationTerminalException(
