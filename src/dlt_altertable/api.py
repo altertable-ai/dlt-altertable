@@ -18,8 +18,7 @@ TERMINAL_STATUSES = {
 
 
 class LargeBlockAdapter(requests.adapters.HTTPAdapter):
-    """urllib3 streams file bodies in blocksize reads, and its 16KiB default measured 31%
-    slower than 1MiB blocks on loopback uploads."""
+    """urllib3's default 16KiB blocksize measured 31% slower than 1MiB on loopback uploads."""
 
     def init_poolmanager(self, *args, **kwargs):
         kwargs["blocksize"] = UPLOAD_BLOCK_BYTES

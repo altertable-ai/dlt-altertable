@@ -11,18 +11,10 @@ from dlt.common.schema.utils import (
 from dlt.common.typing import TSecretStrValue
 
 from dlt_altertable.api import post_parquet
+from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.schema import align_to_table_schema, sync_table_schema
 
 MERGE_STRATEGY_HINT = "x-merge-strategy"
-
-
-def configured(value: str | None, parameter: str, env_var: str) -> str:
-    if resolved := value or os.environ.get(env_var):
-        return resolved
-    raise DestinationTerminalException(
-        f"{parameter} is not configured: pass {parameter}= to altertable(), set "
-        f"destination.altertable.{parameter} in .dlt/secrets.toml, or export {env_var}."
-    )
 
 
 def primary_key_columns(table: TTableSchema) -> list[str]:
@@ -92,6 +84,7 @@ def tables_already_evolved() -> list[str]:
     skip_dlt_columns_and_tables=False,
     max_table_nesting=0,
     loader_parallelism_strategy="table-sequential",
+    spec=AltertableClientConfiguration,
 )
 def altertable(
     parquet_file_path: str,
@@ -104,16 +97,20 @@ def altertable(
     port: int | None = None,
     tls: bool | None = None,
 ) -> None:
-    host = configured(host, "host", "ALTERTABLE_HOST")
-    catalog = configured(catalog, "catalog", "ALTERTABLE_CATALOG")
-    dataset_name = configured(dataset_name, "dataset_name", "ALTERTABLE_SCHEMA")
-    username = configured(username, "username", "ALTERTABLE_USERNAME")
-    password = configured(password, "password", "ALTERTABLE_PASSWORD")
-    port = int(port) if port is not None else int(os.environ.get("ALTERTABLE_PORT", "443"))
-    tls = tls if tls is not None else os.environ.get("ALTERTABLE_TLS", "true").lower() != "false"
-
-    base_url = f"{'https' if tls else 'http'}://{host}:{port}"
-    auth = (username, password)
+    config = AltertableClientConfiguration(
+        host=host,
+        catalog=catalog,
+        dataset_name=dataset_name,
+        username=username,
+        password=password,
+        port=port,
+        tls=tls,
+    )
+    config.on_resolved()
+    catalog = config.catalog
+    dataset_name = config.dataset_name
+    base_url = config.base_url
+    auth = config.basic_auth
     upsert_params = merge_params(table)
 
     replaced_tables = tables_already_replaced()
