@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.0...dlt-altertable-v0.1.1) (2026-08-20)
+
+
+### Features
+
+* prepend dbt-altertable to the user agent ([#4](https://github.com/altertable-ai/dlt-altertable/issues/4)) ([6dd25fb](https://github.com/altertable-ai/dlt-altertable/commit/6dd25fb5bb15f36f67715a17b545792a3d8b1333))
+
 ## 0.1.0 (2026-08-18)
 
 
