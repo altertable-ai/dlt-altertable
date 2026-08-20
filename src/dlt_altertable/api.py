@@ -1,10 +1,12 @@
 import json
 from http import HTTPStatus
+from importlib.metadata import version
 from typing import Any
 
 import requests
 from dlt.common.destination.exceptions import DestinationTerminalException
 from requests.adapters import HTTPAdapter
+from requests.utils import default_user_agent
 
 from dlt_altertable.configuration import AltertableClientConfiguration
 
@@ -32,6 +34,7 @@ class LargeBlockAdapter(HTTPAdapter):
 
 
 session = requests.Session()
+session.headers["User-Agent"] = f"dlt-altertable/{version('dlt-altertable')} {default_user_agent()}"
 _adapter = LargeBlockAdapter(pool_maxsize=LOADER_WORKERS)
 session.mount("http://", _adapter)
 session.mount("https://", _adapter)
