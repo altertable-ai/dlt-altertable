@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.1...dlt-altertable-v0.1.2) (2026-08-20)
+
+
+### Bug Fixes
+
+* uv.lock ([#6](https://github.com/altertable-ai/dlt-altertable/issues/6)) ([fcf8a51](https://github.com/altertable-ai/dlt-altertable/commit/fcf8a513701d4ff899f13f10bdf1b9f574a0c44f))
+
 ## [0.1.1](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.0...dlt-altertable-v0.1.1) (2026-08-20)
 
 
