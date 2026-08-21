@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Literal, cast
 
 import dlt
 from dlt.common.destination.exceptions import DestinationTerminalException
@@ -12,6 +12,8 @@ from dlt.common.schema.utils import (
 from dlt_altertable.api import post_parquet
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.table_schema import aligned_parquet, create_or_evolve_table
+
+type IngestMode = Literal["append", "overwrite", "upsert"]
 
 
 def primary_key_columns(table: TTableSchema) -> list[str]:
@@ -64,7 +66,7 @@ def upsert_params(table: TTableSchema) -> dict[str, str] | None:
     return params
 
 
-def upload_mode(table: TTableSchema, table_already_replaced: bool) -> str:
+def upload_mode(table: TTableSchema, table_already_replaced: bool) -> IngestMode:
     if table.get("write_disposition") == "replace" and not table_already_replaced:
         return "overwrite"
     return "append"
@@ -99,9 +101,11 @@ def altertable(
 
     already_replaced = replaced_tables()
     already_evolved = evolved_tables()
-    mode = upload_mode(table, table_name in already_replaced)
+    ingest_mode: IngestMode = (
+        "upsert" if upsert is not None else upload_mode(table, table_name in already_replaced)
+    )
 
-    if mode != "overwrite" and table_name not in already_evolved:
+    if ingest_mode != "overwrite" and table_name not in already_evolved:
         if create_or_evolve_table(config, table):
             already_evolved.append(table_name)
 
@@ -110,13 +114,13 @@ def altertable(
         "schema": cast(str, config.dataset_name),
         "table": table_name,
     }
-    action = f"loading {config.catalog}.{config.dataset_name}.{table_name}"
+    action = f"{ingest_mode} {config.catalog}.{config.dataset_name}.{table_name}"
     if upsert is not None:
         post_parquet(config, "upsert", params | upsert, parquet_file_path, action)
     else:
-        params["mode"] = mode
+        params["mode"] = ingest_mode
         with aligned_parquet(parquet_file_path, table) as upload_path:
             post_parquet(config, "upload", params, upload_path, action)
 
-    if mode == "overwrite":
+    if ingest_mode == "overwrite":
         already_replaced.append(table_name)
