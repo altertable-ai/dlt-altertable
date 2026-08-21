@@ -406,15 +406,28 @@ def test_wrong_credentials_fail_terminally(
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_server_failures_are_transient_and_name_the_load_target(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+@pytest.mark.parametrize(
+    ("table", "operation"),
+    [
+        (table_schema("contacts", "append"), "append"),
+        (table_schema("contacts", "replace"), "overwrite"),
+        (with_primary_key(table_schema("contacts", "merge"), "id"), "upsert"),
+    ],
+    ids=["append", "overwrite", "upsert"],
+)
+def test_server_failure_names_the_ingest_operation_and_target(
+    server: FakeServer,
+    write_parquet,
+    rows: list[dict[str, Any]],
+    table: TTableSchema,
+    operation: str,
 ) -> None:
     server.transient_upload_failures = 1
 
     with pytest.raises(RuntimeError) as failure:
-        sink(write_parquet(rows), table_schema("contacts", "append"), config=make_config())
+        sink(write_parquet(rows), table, config=make_config())
 
-    assert "lakehouse.raw.contacts" in str(failure.value)
+    assert f"{operation} lakehouse.raw.contacts" in str(failure.value)
     assert "503" in str(failure.value)
 
 
