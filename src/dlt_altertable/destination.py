@@ -42,15 +42,23 @@ def upsert_params(table: TTableSchema) -> dict[str, str] | None:
             f"Table {table['name']}: {unsupported} is not supported by the Altertable "
             "destination, which runs merge as a server-side upsert on the primary_key."
         )
+    primary_keys = primary_key_columns(table)
+    if nullable_primary_key_columns := [
+        name for name in primary_keys if table["columns"][name].get("nullable")
+    ]:
+        raise DestinationTerminalException(
+            f"Table {table['name']}: primary_key columns must be non-nullable: "
+            f"{', '.join(nullable_primary_key_columns)}."
+        )
     dedup_sort = get_dedup_sort_tuple(table)
     cursor = dedup_sort[0] if dedup_sort else None
-    key_columns = [*primary_key_columns(table), *([cursor] if cursor else [])]
+    key_columns = [*primary_keys, *([cursor] if cursor else [])]
     if invalid := [column for column in key_columns if "," in column]:
         raise DestinationTerminalException(
             f"Table {table['name']}: column names {invalid} contain a comma, which the "
             "comma-separated primary_key and cursor_field parameters cannot express."
         )
-    params = {"primary_key": ",".join(primary_key_columns(table))}
+    params = {"primary_key": ",".join(primary_keys)}
     if cursor:
         params["cursor_field"] = cursor
     return params

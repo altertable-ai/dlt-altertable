@@ -187,13 +187,24 @@ def merged_with_scd2() -> Iterator[list[dict[str, Any]]]:
     yield CONTACTS
 
 
+@dlt.resource(
+    name="by_nullable_primary_key",
+    write_disposition="merge",
+    primary_key="id",
+    columns={"id": {"nullable": True}},
+)
+def merged_on_nullable_primary_key() -> Iterator[list[dict[str, Any]]]:
+    yield CONTACTS
+
+
 @pytest.mark.parametrize(
     ("resource", "unsupported"),
     [
         (merged_on_merge_key, "merge_key"),
         (merged_with_scd2, "merge strategy 'scd2'"),
+        (merged_on_nullable_primary_key, "primary_key columns must be non-nullable: id"),
     ],
-    ids=["merge_key", "scd2"],
+    ids=["merge_key", "scd2", "nullable_primary_key"],
 )
 def test_unsupported_merge_configurations_fail_the_pipeline(
     server: FakeServer, run_pipeline, resource: Any, unsupported: str
