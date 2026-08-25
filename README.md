@@ -153,6 +153,20 @@ retry into duplicate appended rows. `merge` tables are idempotent under retry, `
 least once, and `replace` is at least once after its first file, since only the first file of
 the load recreates the table and a retried later file appends twice.
 
+Rows that land twice raise no error. `verify_load` reads the tables back after a load and
+reports what does not add up:
+
+```python
+from dlt_altertable import verify_load
+
+pipeline.run(contacts())
+if problems := verify_load(pipeline):
+    raise RuntimeError("\n".join(problems))
+```
+
+It returns an empty list when the load reconciles and one message for each problem otherwise.
+It raises when the last trace has no load to verify or belongs to a non-Altertable destination.
+
 The destination declares `loader_parallelism_strategy="table-sequential"`, and the `replace`
 bookkeeping depends on it. Do not override it with `LOAD__PARALLELISM_STRATEGY=parallel`: two
 files of one replace load would both recreate the table and silently lose rows.
