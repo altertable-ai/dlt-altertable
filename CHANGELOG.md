@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.3](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.2...dlt-altertable-v0.1.3) (2026-08-25)
+
+
+### Features
+
+* **sink:** name the operation in upload errors ([#9](https://github.com/altertable-ai/dlt-altertable/issues/9)) ([bfe2538](https://github.com/altertable-ai/dlt-altertable/commit/bfe25385a3941bd477c8a3cefa33e1b1ed9f936a))
+* **verify:** verify loads against the lakehouse ([#12](https://github.com/altertable-ai/dlt-altertable/issues/12)) ([79cb662](https://github.com/altertable-ai/dlt-altertable/commit/79cb6626b3508ce7d36e734c217883b8c416c7e4))
+
+
+### Bug Fixes
+
+* **sink:** refuse a nullable primary key instead of duplicating rows ([#8](https://github.com/altertable-ai/dlt-altertable/issues/8)) ([cf4fed2](https://github.com/altertable-ai/dlt-altertable/commit/cf4fed2ab9ca6d9258c4e2871e73fec9cd00dd5d))
+
 ## [0.1.2](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.1...dlt-altertable-v0.1.2) (2026-08-20)
 
 
