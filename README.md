@@ -71,6 +71,19 @@ Two notes on naming:
 - To point several pipelines at different backends, name each configuration:
   `altertable(destination_name="altertable_staging")` reads `[destination.altertable_staging]`.
 
+## Check the catalog before loading
+
+`verify_catalog` answers whether a load would reach the configured catalog, without running one.
+It returns one message per catalog problem and an empty list when the catalog is writable.
+Configuration, authentication, and query failures raise.
+
+```python
+from dlt_altertable import verify_catalog
+
+if problems := verify_catalog():
+    raise RuntimeError("\n".join(problems))
+```
+
 ## Write dispositions
 
 | dlt write disposition | HTTP call                                | Notes                                                |
@@ -146,7 +159,7 @@ files of one replace load would both recreate the table and silently lose rows.
 
 One caveat discovered the hard way: the target schema is created on demand, so a typo in
 `dataset_name` does not fail, it lands data in a new schema. The catalog, by contrast,
-must exist.
+must exist, which `verify_catalog` reports before a load discovers it.
 
 ## Incremental state on ephemeral runners
 

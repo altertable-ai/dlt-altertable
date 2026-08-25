@@ -54,6 +54,10 @@ class FakeResponse:
     text: str = ""
 
 
+def query_response(rows: list[Any]) -> FakeResponse:
+    return FakeResponse(200, "\n".join(jsonlib.dumps(line) for line in [{}, [], *rows]))
+
+
 @dataclass
 class FakeServer:
     uploads: list[RecordedRequest] = field(default_factory=list)
@@ -61,6 +65,7 @@ class FakeServer:
     statements: list[str] = field(default_factory=list)
     query_payloads: list[dict[str, Any]] = field(default_factory=list)
     existing_columns: list[str] = field(default_factory=list)
+    catalogs: dict[str, bool] = field(default_factory=lambda: {"lakehouse": False})
     successes_before_failures: int = 0
     transient_upload_failures: int = 0
     terminal_upload_failure: bool = False
@@ -103,16 +108,19 @@ class FakeServer:
             self.statements.append(statement)
             self.query_payloads.append(dict(json))
             if self.query_error is not None:
-                lines: list[Any] = [{}, [], {"error": self.query_error}]
-            elif statement.startswith(("ALTER", "CREATE")):
-                lines = [{}, []]
-            else:
-                lines = [
-                    {},
-                    [{"name": "column_name", "type": "VARCHAR"}],
-                    *[[column] for column in self.existing_columns],
-                ]
-            return FakeResponse(200, "\n".join(jsonlib.dumps(line) for line in lines))
+                return query_response([{"error": self.query_error}])
+            if statement.startswith(("ALTER", "CREATE")):
+                return query_response([])
+            if "duckdb_databases" in statement:
+                excluded = {"memory"} if "database_name <> 'memory'" in statement else set()
+                return query_response(
+                    [
+                        [name, readonly]
+                        for name, readonly in self.catalogs.items()
+                        if name not in excluded
+                    ]
+                )
+            return query_response([[column] for column in self.existing_columns])
 
         table_name = params["table"]
         if not table_name.startswith("_dlt"):
