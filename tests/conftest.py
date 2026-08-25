@@ -1,5 +1,6 @@
 import io
 import json as jsonlib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ DESTINATION_OPTIONS = {
 }
 
 BASE_URL = "http://altertable.test:15002"
+
+QUALIFIED_TABLE = re.compile(r'"[^"]+"\."[^"]+"\."([^"]+)"')
 
 
 def make_config(**overrides: Any) -> AltertableClientConfiguration:
@@ -54,6 +57,10 @@ class FakeResponse:
     text: str = ""
 
 
+def query_response(rows: list[Any]) -> FakeResponse:
+    return FakeResponse(200, "\n".join(jsonlib.dumps(line) for line in [{}, [], *rows]))
+
+
 @dataclass
 class FakeServer:
     uploads: list[RecordedRequest] = field(default_factory=list)
@@ -61,6 +68,10 @@ class FakeServer:
     statements: list[str] = field(default_factory=list)
     query_payloads: list[dict[str, Any]] = field(default_factory=list)
     existing_columns: list[str] = field(default_factory=list)
+    catalogs: dict[str, bool] = field(default_factory=lambda: {"lakehouse": False})
+    counts: dict[str, list[int]] = field(default_factory=dict)
+    counts_asked: dict[str, str] = field(default_factory=dict)
+    missing_tables: list[str] = field(default_factory=list)
     successes_before_failures: int = 0
     transient_upload_failures: int = 0
     terminal_upload_failure: bool = False
@@ -73,9 +84,28 @@ class FakeServer:
     def attempts_for(self, table_name: str) -> int:
         return self.attempted_tables.count(table_name)
 
+    def count_query_response(self, statement: str) -> FakeResponse:
+        qualified_table = QUALIFIED_TABLE.search(statement)
+        assert qualified_table, f"count query names no qualified table: {statement}"
+        table_name = qualified_table.group(1)
+        self.counts_asked[table_name] = statement
+        if table_name in self.counts:
+            return query_response([self.counts[table_name]])
+        uploaded_row_count = self.uploaded_row_count(table_name, statement)
+        selected_count_columns = statement.count("count(")
+        return query_response([[uploaded_row_count] * selected_count_columns])
+
+    def uploaded_row_count(self, table_name: str, count_query: str) -> int:
+        """A replace count query spans the whole replacement table, so it names no load id,
+        while an append or merge one counts only the rows whose load id it names."""
+        rows = [row for upload in self.uploads_for(table_name) for row in upload.rows]
+        if "_dlt_load_id" not in count_query:
+            return len(rows)
+        return sum(1 for row in rows if f"'{row['_dlt_load_id']}'" in count_query)
+
     @property
     def schema_lookups(self) -> list[str]:
-        return [statement for statement in self.statements if "information_schema" in statement]
+        return [s for s in self.statements if "information_schema.columns" in s]
 
     @property
     def alters(self) -> list[str]:
@@ -103,16 +133,24 @@ class FakeServer:
             self.statements.append(statement)
             self.query_payloads.append(dict(json))
             if self.query_error is not None:
-                lines: list[Any] = [{}, [], {"error": self.query_error}]
-            elif statement.startswith(("ALTER", "CREATE")):
-                lines = [{}, []]
-            else:
-                lines = [
-                    {},
-                    [{"name": "column_name", "type": "VARCHAR"}],
-                    *[[column] for column in self.existing_columns],
-                ]
-            return FakeResponse(200, "\n".join(jsonlib.dumps(line) for line in lines))
+                return query_response([{"error": self.query_error}])
+            if statement.startswith(("ALTER", "CREATE")):
+                return query_response([])
+            if "information_schema.tables" in statement:
+                landed = {upload.params["table"] for upload in self.uploads}
+                return query_response([[t] for t in sorted(landed - set(self.missing_tables))])
+            if "duckdb_databases" in statement:
+                excluded = {"memory"} if "database_name <> 'memory'" in statement else set()
+                return query_response(
+                    [
+                        [name, readonly]
+                        for name, readonly in self.catalogs.items()
+                        if name not in excluded
+                    ]
+                )
+            if statement.startswith("SELECT count"):
+                return self.count_query_response(statement)
+            return query_response([[column] for column in self.existing_columns])
 
         table_name = params["table"]
         if not table_name.startswith("_dlt"):
