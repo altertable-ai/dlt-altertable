@@ -79,6 +79,9 @@ rows = dataset.contacts.select("id", "email").limit(10).fetchall()
 table = dataset.contacts.arrow()
 ```
 
+`dataset.contacts.df()` uses pandas' default types, so nullable integers become floats and lose
+precision above 2**53. Keep them with `table.to_pandas(types_mapper=pd.ArrowDtype)`.
+
 Reads buffer the full result in memory, even when iterating chunks. Parameter binding and
 transactions are unsupported.
 

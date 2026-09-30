@@ -8,6 +8,24 @@ from dlt.common.destination.exceptions import DestinationTerminalException
 pytestmark = pytest.mark.integration
 
 
+def test_loaded_arrow_types_round_trip(pipeline_factory) -> None:
+    pipeline = pipeline_factory("original")
+    source = pa.table(
+        {
+            "id": pa.array([2**53 + 1, None], type=pa.int64()),
+            "amount": pa.array([Decimal("123456789.123"), None], type=pa.decimal128(12, 3)),
+            "instant": pa.array(
+                [datetime(2026, 9, 30, 12, tzinfo=UTC), None], type=pa.timestamp("us", tz="UTC")
+            ),
+        }
+    )
+    pipeline.run(source, table_name="events")
+    result = pipeline.dataset().events.select(*source.column_names).order_by("id").arrow()
+    assert result.schema.field("id").type == pa.int64()
+    assert result.schema.field("amount").type == pa.decimal128(12, 3)
+    assert result.cast(source.schema).equals(source)
+
+
 def test_dataset_reads_from_the_configured_schema(mock_config, pipeline_factory) -> None:
     pipeline = pipeline_factory("original")
     pipeline.run([{"id": i, "label": str(i)} for i in range(1, 6)], table_name="events")
