@@ -17,7 +17,7 @@ column. Merge files always post as they are, so columns a file omits keep their 
 uv add dlt-altertable
 ```
 
-Supported: Python 3.12 to 3.14, `dlt >= 1.19`. The only other dependencies are `pyarrow`, `requests`, and `urllib3`.
+Supported: Python 3.12 to 3.14, `dlt >= 1.30, < 2`.
 
 ## Use
 
@@ -121,8 +121,9 @@ dlt's batch-only deduplication. Without the hint, which row wins is up to the se
 
 Like dlt's SQL destinations, this destination loads dlt's lineage columns: every row carries
 `_dlt_id` and `_dlt_load_id`, making it traceable to the load that produced it. The dataset also
-gains a `_dlt_pipeline_state` table. dlt maintains `_dlt_loads` and `_dlt_version` only inside
-SQL destinations, so those tables do not appear here.
+contains `_dlt_pipeline_state`, `_dlt_loads` and `_dlt_version`. They store pipeline checkpoints,
+completed loads and schema versions. State restoration only uses checkpoints belonging to a
+completed load.
 
 ## Schema evolution
 
@@ -145,8 +146,7 @@ a `replace` load recreates the table.
 Failures map onto dlt's retry contract: errors a retry cannot fix, such as bad credentials or
 an invalid request, fail the job immediately with a terminal error, while server errors,
 capacity timeouts and connection failures are retried by dlt until the fifth attempt fails
-(`load.raise_on_max_retries`). Errors streamed mid-response by `/query` retry as well, which
-is safe because every statement the destination issues is `IF NOT EXISTS`-idempotent. The upload
+(`load.raise_on_max_retries`). Errors streamed mid-response by `/query` raise as well. The upload
 read timeout is one hour, because the server answers only once the file is fully ingested. Do
 not lower it: a request aborted client side can still complete on the server, which turns dlt's
 retry into duplicate appended rows. `merge` tables are idempotent under retry, `append` is at
@@ -177,34 +177,19 @@ must exist, which `verify_catalog` reports before a load discovers it.
 
 ## Incremental state on ephemeral runners
 
-[Custom destinations cannot restore pipeline state](https://dlthub.com/docs/dlt-ecosystem/destinations/destination),
-so incremental cursors live only in dlt's own state under `pipelines_dir`. On an ephemeral runner
-that directory is gone on the next run, and every load starts from scratch.
+Keep the same `pipeline_name`, catalog and destination schema between runs. dlt restores the
+latest completed checkpoint and stored schema before extracting, even with a fresh `pipelines_dir`.
+You can request restoration explicitly with `pipeline.sync_destination()`.
 
-Either persist `pipelines_dir` between runs, or bootstrap the cursor from the destination itself
-before extracting:
+Remote checkpoints let a fresh runner continue incremental extraction. Persist `pipelines_dir`
+when you need to resume an unfinished load, because its pending parquet files and job progress
+live locally. Authentication and query failures raise during restoration; they are not treated
+as empty storage.
 
-```python
-import json
-import requests
-
-response = requests.post(
-    "https://api.altertable.ai/query",
-    json={"statement": f'SELECT max(lastmodifieddate) FROM "{catalog}"."{schema}"."{table_name}"'},
-    auth=(username, password),
-    timeout=(10, 300),
-)
-response.raise_for_status()
-rows = [json.loads(line) for line in response.text.splitlines()]
-if any(isinstance(row, dict) and "error" in row for row in rows):
-    raise RuntimeError(rows)
-since = rows[2][0]
-```
-
-The response streams one JSON line per row after two metadata lines, so the first row sits at
-index 2. A failed query arrives as an `{"error": ...}` line inside the stream, not as a special
-row, so check for it before trusting the value. An empty table gives a `NULL` max, which simply
-means start from the beginning.
+`client.drop_storage()` defaults to a dry run: it warns with the SQL and does not execute it.
+Pass `dry_run=False` to delete the configured destination schema and all its tables, including
+tables belonging to other pipelines. This opt-in prevents accidental calls, not unrestricted
+code execution with privileged credentials.
 
 ## Develop
 
@@ -215,15 +200,23 @@ uv run --locked ruff format --check .
 uvx ty check src
 ```
 
-The test suite mocks the HTTP API and needs no server. For a live check, run
-[altertable-mock](https://github.com/altertable-ai/altertable-mock) and point a pipeline at its
-Lakehouse REST port:
+Unit tests need no server. CI also runs `tests/integration` against
+[altertable-mock](https://github.com/altertable-ai/altertable-mock), with a separate schema per
+test. These tests cover fresh-runner recovery, failed completion, and deleted storage.
+Run them locally:
 
 ```bash
-docker run -d -p 15100:15000 \
-  -e ALTERTABLE_MOCK_LAKEHOUSE_PORT=15000 -e ALTERTABLE_MOCK_USERS="dlt-demo:lk_demo" \
+docker run --rm -d --name dlt-altertable-mock -p 127.0.0.1:15100:15000 \
+  -e ALTERTABLE_MOCK_USERS="integration:integration" \
   ghcr.io/altertable-ai/altertable-mock:latest
+
+DLT_ALTERTABLE_INTEGRATION=1 uv run --locked pytest tests/integration
+docker stop dlt-altertable-mock
 ```
+
+Override `DLT_ALTERTABLE_MOCK_URL`, `DLT_ALTERTABLE_MOCK_USERNAME`, and
+`DLT_ALTERTABLE_MOCK_PASSWORD` for another local mock. Enabled tests fail on connection and
+authentication errors.
 
 ## Resources
 

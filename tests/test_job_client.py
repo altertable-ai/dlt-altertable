@@ -1,0 +1,64 @@
+import dlt
+import pytest
+from dlt.pipeline.exceptions import PipelineStepFailed
+
+import dlt_altertable.api
+from dlt_altertable import altertable
+from tests.conftest import DESTINATION_OPTIONS, FakeResponse
+
+
+@pytest.fixture
+def pipeline(tmp_path):
+    return dlt.pipeline(
+        pipeline_name="state_restore",
+        destination=altertable(**DESTINATION_OPTIONS),
+        pipelines_dir=str(tmp_path),
+    )
+
+
+@pytest.mark.parametrize(
+    "options", [{}, {"dry_run": True}, {"dry_run": "false"}, {"dry_run": None}, {"dry_run": 0}]
+)
+def test_drop_storage_previews_sql_without_sending_requests(server, pipeline, options):
+    with pipeline.destination_client() as client:
+        with pytest.warns(UserWarning, match="not executed") as warnings:
+            client.drop_storage(**options)
+
+    message = str(warnings[0].message)
+    assert 'DROP SCHEMA IF EXISTS "lakehouse"."raw" CASCADE' in message
+    assert "dry_run=False" in message
+    assert server.statements == []
+
+
+def test_drop_storage_executes_only_when_explicitly_requested(server, pipeline):
+    with pipeline.destination_client() as client:
+        client.config.catalog = 'lake"house'
+        client.config.dataset_name = "raw.schema"
+
+        client.drop_storage(dry_run=False)
+
+    assert server.statements == ['DROP SCHEMA IF EXISTS "lake""house"."raw.schema" CASCADE']
+
+
+@pytest.mark.parametrize("unauthenticated", [False, True])
+def test_state_lookup_errors_preserve_local_state(server, pipeline, unauthenticated):
+    pipeline.run([{"id": 1}], table_name="events")
+    state = pipeline.state
+    server.unauthenticated = unauthenticated
+    server.query_error = "worker lease expired"
+    message = "Invalid credentials" if unauthenticated else "worker lease expired"
+
+    with pytest.raises(PipelineStepFailed, match=message):
+        pipeline.sync_destination()
+
+    assert pipeline.state == state
+
+
+@pytest.mark.parametrize("payload", ["", "{}", "{}\n{}", "{}\n[]\n{}"])
+def test_malformed_state_response_is_not_empty_storage(monkeypatch, pipeline, payload):
+    monkeypatch.setattr(
+        dlt_altertable.api.session, "post", lambda *args, **kwargs: FakeResponse(200, payload)
+    )
+
+    with pytest.raises(PipelineStepFailed, match="Malformed query response"):
+        pipeline.sync_destination()

@@ -102,8 +102,8 @@ def load_context(
     pipeline: dlt.Pipeline,
 ) -> tuple[LoadInfo, dict[str, int] | None, AltertableClientConfiguration]:
     trace = pipeline.last_trace
-    load_info = trace.last_load_info if trace else None
-    if not (load_info and load_info.loads_ids):
+    load_info = trace.last_load_info if trace is not None else None
+    if load_info is None or not load_info.loads_ids:
         raise ValueError(
             "verify_load reads the load step of a pipeline.run() from the pipeline trace, "
             "and found none."
