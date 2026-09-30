@@ -61,6 +61,12 @@ def execute_sql(config: AltertableClientConfiguration, statement: str) -> list[l
     for entry in payload:
         if isinstance(entry, dict) and "error" in entry:
             raise RuntimeError(f"query {statement!r} failed mid-stream: {entry['error']}")
+    if (
+        len(payload) < 2
+        or not isinstance(payload[0], dict)
+        or not all(isinstance(entry, list) for entry in payload[1:])
+    ):
+        raise RuntimeError(f"Malformed query response for {statement!r}: missing headers or rows.")
     return payload[2:]
 
 

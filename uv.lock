@@ -231,7 +231,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dlt", extras = ["parquet"], specifier = "~=1.19" },
+    { name = "dlt", extras = ["parquet"], specifier = "~=1.30" },
     { name = "pyarrow", specifier = ">=15.0.0" },
     { name = "requests", specifier = ">=2.26" },
     { name = "urllib3", specifier = ">=2" },

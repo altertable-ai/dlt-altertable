@@ -260,7 +260,7 @@ def test_a_resumed_load_reports_the_row_count_it_cannot_reconcile(tmp_path: Path
     pipeline_with_pending_load.normalize()
 
     resumed_pipeline = build_pipeline()
-    resumed_pipeline.run()
+    resumed_pipeline.load()
     expected_problems = [
         "_dlt_pipeline_state: this run loaded a package it did not normalize, "
         "so it carries no row count to compare",
@@ -272,13 +272,18 @@ def test_a_resumed_load_reports_the_row_count_it_cannot_reconcile(tmp_path: Path
     assert verify_load(resumed_pipeline) == expected_problems
 
 
-def test_a_trace_without_a_load_says_so() -> None:
-    never_ran = dlt.pipeline(
-        pipeline_name="never_ran", destination=altertable(**DESTINATION_OPTIONS)
+@pytest.mark.parametrize("extract_first", [False, True])
+def test_a_trace_without_a_load_says_so(tmp_path, extract_first: bool) -> None:
+    pipeline = dlt.pipeline(
+        pipeline_name="never_ran",
+        destination=altertable(**DESTINATION_OPTIONS),
+        pipelines_dir=str(tmp_path),
     )
+    if extract_first:
+        pipeline.extract([{"id": 1}], table_name="events")
 
     with pytest.raises(ValueError, match=r"pipeline\.run\(\)"):
-        verify_load(never_ran)
+        verify_load(pipeline)
 
 
 @pytest.mark.usefixtures("server")

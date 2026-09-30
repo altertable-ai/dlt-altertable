@@ -44,11 +44,15 @@ def sql_type(column: TColumnSchema) -> str:
     return SQL_TYPES[cast(str, column["data_type"])]
 
 
-def qualified_table_name(config: AltertableClientConfiguration, table_name: str) -> str:
+def qualified_schema_name(config: AltertableClientConfiguration) -> str:
     return ".".join(
         escape_postgres_identifier(part)
-        for part in cast(tuple[str, str, str], (config.catalog, config.dataset_name, table_name))
+        for part in cast(tuple[str, str], (config.catalog, config.dataset_name))
     )
+
+
+def qualified_table_name(config: AltertableClientConfiguration, table_name: str) -> str:
+    return f"{qualified_schema_name(config)}.{escape_postgres_identifier(table_name)}"
 
 
 def create_table(config: AltertableClientConfiguration, table: TTableSchema) -> None:
@@ -59,9 +63,7 @@ def create_table(config: AltertableClientConfiguration, table: TTableSchema) -> 
     )
     execute_sql(
         config,
-        "CREATE SCHEMA IF NOT EXISTS "
-        f"{escape_postgres_identifier(cast(str, config.catalog))}"
-        f".{escape_postgres_identifier(cast(str, config.dataset_name))}",
+        f"CREATE SCHEMA IF NOT EXISTS {qualified_schema_name(config)}",
     )
     execute_sql(
         config,

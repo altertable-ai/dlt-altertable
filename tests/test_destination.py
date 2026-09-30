@@ -1,18 +1,21 @@
 from pathlib import Path
 from typing import Any
 
+import dlt
 import pytest
 from dlt.common.configuration import ConfigurationValueError
-from dlt.common.destination.exceptions import DestinationTerminalException
+from dlt.common.destination.exceptions import (
+    DestinationIncompatibleLoaderFileFormatException,
+    DestinationTerminalException,
+)
 from dlt.common.exceptions import TerminalValueError
 from dlt.common.schema import TTableSchema
 
 import dlt_altertable.destination
 from dlt_altertable import altertable
 from dlt_altertable.configuration import AltertableClientConfiguration
-from tests.conftest import BASE_URL, FakeServer, make_config
-
-sink = altertable.__wrapped__
+from dlt_altertable.destination import _upload as sink
+from tests.conftest import BASE_URL, DESTINATION_OPTIONS, FakeServer, make_config
 
 ALTERTABLE_ENVIRONMENT = {
     "ALTERTABLE_HOST": "altertable.env",
@@ -510,3 +513,81 @@ def test_missing_configuration_is_terminal_and_names_every_surface() -> None:
     assert "host is not configured" in str(failure.value)
     assert "destination.altertable.host" in str(failure.value)
     assert "ALTERTABLE_HOST" in str(failure.value)
+
+
+def test_named_destination_configuration_keeps_precedence(
+    server, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("DESTINATION__WAREHOUSE__HOST", "named.test")
+    monkeypatch.setenv("DESTINATION__ALTERTABLE__HOST", "wrong.test")
+    options = {key: value for key, value in DESTINATION_OPTIONS.items() if key != "host"}
+    pipeline = dlt.pipeline(
+        pipeline_name="named",
+        destination=altertable(destination_name="warehouse", **options),
+        pipelines_dir=str(tmp_path),
+    )
+
+    pipeline.run([{"id": 1}], table_name="events")
+
+    assert server.uploads_for("events")[0].url.startswith("http://named.test:")
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("batch_size", 1),
+        ("loader_file_format", "typed-jsonl"),
+        ("skip_dlt_columns_and_tables", True),
+        ("destination_callable", lambda *args: None),
+        ("spec", None),
+        ("loader_parallelism_strategy", "parallel"),
+        ("preferred_loader_file_format", "typed-jsonl"),
+        ("supported_loader_file_formats", ["typed-jsonl", "parquet"]),
+        ("loader_file_format_selector", lambda *args, **kwargs: ("typed-jsonl", ["typed-jsonl"])),
+    ],
+)
+def test_unsafe_destination_overrides_fail_before_loading(option: str, value: Any) -> None:
+    with pytest.raises(ConfigurationValueError, match=option):
+        altertable(**DESTINATION_OPTIONS, **{option: value})
+
+
+@pytest.mark.parametrize("override_formats", [False, True], ids=["default", "mutated_override"])
+def test_jsonl_is_rejected_before_extraction(tmp_path: Path, override_formats: bool) -> None:
+    formats = ["parquet"]
+    options = {"supported_loader_file_formats": formats} if override_formats else {}
+    destination = altertable(**DESTINATION_OPTIONS, **options)
+    formats.append("typed-jsonl")
+    pipeline = dlt.pipeline(
+        pipeline_name="unsupported_format",
+        destination=destination,
+        pipelines_dir=str(tmp_path),
+    )
+
+    with pytest.raises(DestinationIncompatibleLoaderFileFormatException):
+        pipeline.extract([{"id": 1}], table_name="events", loader_file_format="typed-jsonl")
+
+    assert pipeline.list_extracted_load_packages() == []
+
+
+def test_environment_cannot_disable_state_or_parquet_uploads(
+    server: FakeServer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name, value in {
+        "BATCH_SIZE": "1",
+        "LOADER_FILE_FORMAT": "typed-jsonl",
+        "SKIP_DLT_COLUMNS_AND_TABLES": "true",
+        "DESTINATION_CALLABLE": "missing_module.upload",
+    }.items():
+        monkeypatch.setenv(f"DESTINATION__ALTERTABLE__{name}", value)
+    pipeline = dlt.pipeline(
+        pipeline_name="fixed_upload_settings",
+        destination=altertable(batch_size=0, **DESTINATION_OPTIONS),
+        pipelines_dir=str(tmp_path),
+    )
+
+    pipeline.run([{"id": 1}], table_name="events")
+
+    upload = server.uploads_for("events")[0]
+    assert upload.rows[0]["id"] == 1
+    assert "_dlt_load_id" in upload.schema.names
+    assert len(server.uploads_for("_dlt_pipeline_state")) == 1

@@ -1,6 +1,7 @@
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import dlt
+from dlt.common.configuration import ConfigurationValueError
 from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.schema import TTableSchema
 from dlt.common.schema.utils import (
@@ -8,10 +9,15 @@ from dlt.common.schema.utils import (
     get_dedup_sort_tuple,
     has_column_with_prop,
 )
+from dlt.destinations.impl.destination.factory import destination as CustomDestination
 
 from dlt_altertable.api import post_parquet
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.table_schema import aligned_parquet, create_or_evolve_table
+
+if TYPE_CHECKING:
+    from dlt_altertable.job_client import AltertableJobClient
+
 
 type IngestMode = Literal["append", "overwrite", "upsert"]
 
@@ -80,18 +86,7 @@ def evolved_tables() -> list[str]:
     return dlt.current.destination_state().setdefault("evolved_tables", [])
 
 
-# batch_size=0 hands each load job a file path, the one branch of dlt's `TDataItems | str` argument.
-@dlt.destination(  # ty: ignore[invalid-argument-type]
-    name="altertable",
-    naming_convention="direct",
-    loader_file_format="parquet",
-    batch_size=0,
-    skip_dlt_columns_and_tables=False,
-    max_table_nesting=0,
-    loader_parallelism_strategy="table-sequential",
-    spec=AltertableClientConfiguration,
-)
-def altertable(
+def _upload(
     parquet_file_path: str,
     table: TTableSchema,
     config: AltertableClientConfiguration = dlt.config.value,
@@ -124,3 +119,33 @@ def altertable(
 
     if ingest_mode == "overwrite":
         already_replaced.append(table_name)
+
+
+class altertable(CustomDestination):
+    def __init__(self, destination_name: str = "altertable", **kwargs: Any) -> None:
+        options: dict[str, Any] = {
+            "destination_callable": _upload,
+            "naming_convention": "direct",
+            "loader_file_format": "parquet",
+            "preferred_loader_file_format": "parquet",
+            "supported_loader_file_formats": ["parquet"],
+            "loader_file_format_selector": None,
+            "batch_size": 0,
+            "skip_dlt_columns_and_tables": False,
+            "max_table_nesting": 0,
+            "loader_parallelism_strategy": "table-sequential",
+            "spec": AltertableClientConfiguration,
+        }
+        for name, value in options.items():
+            if name in kwargs and kwargs[name] != value:
+                raise ConfigurationValueError(f"altertable does not support overriding {name}.")
+        super().__init__(destination_name=destination_name, **(kwargs | options))
+
+    @property
+    def client_class(self) -> type["AltertableJobClient"]:
+        from dlt_altertable.job_client import AltertableJobClient
+
+        return AltertableJobClient
+
+
+altertable.register()

@@ -18,7 +18,7 @@ classifiers = [
 requires-python = ">=3.12"
 
 dependencies = [
-    "dlt[parquet]~=1.19",
+    "dlt[parquet]~=1.30",
     "pyarrow>=15.0.0",
     "requests>=2.26",
     "urllib3>=2",
@@ -44,5 +44,6 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
+markers = ["integration: requires explicitly enabled local integration checks"]
 testpaths = ["tests"]
 addopts = ["-v", "--tb=short", "--strict-markers", "-n", "auto", "--dist=worksteal"]
