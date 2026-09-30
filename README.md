@@ -71,6 +71,17 @@ Two notes on naming:
 - To point several pipelines at different backends, name each configuration:
   `altertable(destination_name="altertable_staging")` reads `[destination.altertable_staging]`.
 
+## Read loaded data
+
+```python
+dataset = pipeline.dataset()
+rows = dataset.contacts.select("id", "email").limit(10).fetchall()
+table = dataset.contacts.arrow()
+```
+
+Reads buffer the full result in memory, even when iterating chunks. Parameter binding and
+transactions are unsupported.
+
 ## Check the catalog before loading
 
 `verify_catalog` answers whether a load would reach the configured catalog, without running one.
@@ -202,7 +213,7 @@ uvx ty check src
 
 Unit tests need no server. CI also runs `tests/integration` against
 [altertable-mock](https://github.com/altertable-ai/altertable-mock), with a separate schema per
-test. These tests cover fresh-runner recovery, failed completion, and deleted storage.
+test. Tests cover state recovery, incomplete loads, deleted storage, and dataset reads.
 Run them locally:
 
 ```bash

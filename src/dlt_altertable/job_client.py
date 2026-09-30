@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from functools import cached_property
 from typing import Any
 from warnings import warn
 
@@ -9,9 +10,11 @@ from dlt.common.destination.client import StateInfo, StorageSchemaInfo, WithStat
 from dlt.common.destination.exceptions import DestinationUndefinedEntity
 from dlt.common.schema import TSchemaTables
 from dlt.destinations.impl.destination.destination import DestinationClient
+from dlt.destinations.sql_client import WithSqlClient
 
 from dlt_altertable.api import execute_sql
 from dlt_altertable.configuration import AltertableClientConfiguration
+from dlt_altertable.sql_client import AltertableSqlClient
 from dlt_altertable.table_schema import (
     create_or_evolve_table,
     qualified_schema_name,
@@ -19,8 +22,16 @@ from dlt_altertable.table_schema import (
 )
 
 
-class AltertableJobClient(DestinationClient, WithStateSync):
+class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
     config: AltertableClientConfiguration
+
+    @property
+    def sql_client_class(self) -> type[AltertableSqlClient]:
+        return AltertableSqlClient
+
+    @cached_property
+    def sql_client(self) -> AltertableSqlClient:
+        return self.sql_client_class(self.config, self.capabilities)
 
     def _table_exists(self, table_name: str) -> bool:
         rows = execute_sql(

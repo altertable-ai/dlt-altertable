@@ -2,6 +2,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import dlt
 from dlt.common.configuration import ConfigurationValueError
+from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
+from dlt.common.destination import DestinationCapabilitiesContext
 from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.schema import TTableSchema
 from dlt.common.schema.utils import (
@@ -140,6 +142,13 @@ class altertable(CustomDestination):
             if name in kwargs and kwargs[name] != value:
                 raise ConfigurationValueError(f"altertable does not support overriding {name}.")
         super().__init__(destination_name=destination_name, **(kwargs | options))
+
+    def _raw_capabilities(self) -> DestinationCapabilitiesContext:
+        caps = super()._raw_capabilities()
+        caps.sqlglot_dialect = "duckdb"
+        caps.escape_identifier = escape_postgres_identifier
+        caps.escape_literal = escape_duckdb_literal
+        return caps
 
     @property
     def client_class(self) -> type["AltertableJobClient"]:

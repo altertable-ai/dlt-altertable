@@ -29,11 +29,10 @@ def test_fresh_runner_restores_cursor_and_schema(mock_config, pipeline_factory):
 
     assert starts == [0, 2]
     assert "label" in restored.default_schema.tables["events"]["columns"]
-    table = qualified_table_name(mock_config, "events")
-    assert execute_sql(mock_config, f"SELECT id, label FROM {table} ORDER BY id") == [
-        [1, "one"],
-        [2, "two"],
-        [3, None],
+    assert restored.dataset().events.select("id", "label").order_by("id").fetchall() == [
+        (1, "one"),
+        (2, "two"),
+        (3, None),
     ]
     versions = qualified_table_name(mock_config, "_dlt_version")
     assert execute_sql(
