@@ -1,4 +1,3 @@
-import io
 from collections.abc import Generator, Iterator
 from contextlib import closing, contextmanager, suppress
 from typing import Any, AnyStr, cast
@@ -136,7 +135,7 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
             self.config, statement, output_format="parquet", dataset_name=self.dataset_name
         )
         # ponytail: responses are buffered; use streaming Parquet files if result memory matters.
-        table = pq.ParquetFile(io.BytesIO(response.content)).read()
+        table = pq.ParquetFile(pa.BufferReader(response.content)).read()
         # dlt's native cursor annotation includes conversions provided by this wrapper.
         with closing(DltArrowCursor(cast(DBApiCursor, ArrowTableCursor(table)))) as cursor:
             yield cursor
