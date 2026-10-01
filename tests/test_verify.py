@@ -63,8 +63,8 @@ def merged_visits() -> Iterator[list[dict[str, Any]]]:
     ]
 
 
-@dlt.resource(name="contacts", write_disposition="merge")
-def keyless_contacts() -> Iterator[list[dict[str, Any]]]:
+@dlt.resource(name="contacts", write_disposition="merge", primary_key="id")
+def merged_contacts() -> Iterator[list[dict[str, Any]]]:
     yield [{"id": 3, "email": "linus@example.com"}]
 
 
@@ -151,7 +151,7 @@ def test_duplicate_primary_keys_in_a_merge_table_are_reported(
     )
 
 
-def test_a_merge_without_a_primary_key_is_reported(
+def test_a_failed_merge_load_is_reported(
     server: FakeServer,
     loaded_pipeline,
     monkeypatch: pytest.MonkeyPatch,
@@ -166,7 +166,8 @@ def test_a_merge_without_a_primary_key_is_reported(
     )
     seed_pipeline.run(dlt.resource([{"id": 1}], name="contacts", write_disposition="append"))
 
-    pipeline = loaded_pipeline(keyless_contacts())
+    server.terminal_upload_failure = True
+    pipeline = loaded_pipeline(merged_contacts())
 
     assert pipeline.last_trace.last_load_info.has_failed_jobs
     assert verify_load(pipeline) == [

@@ -1,29 +1,49 @@
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from functools import cached_property
-from typing import Any
+from typing import Any, cast
 from warnings import warn
 
 from dlt.common import json
 from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
-from dlt.common.destination.client import StateInfo, StorageSchemaInfo, WithStateSync
+from dlt.common.destination.client import (
+    PreparedTableSchema,
+    StateInfo,
+    StorageSchemaInfo,
+    WithStateSync,
+)
 from dlt.common.destination.exceptions import DestinationUndefinedEntity
-from dlt.common.schema import TSchemaTables
+from dlt.common.schema import TSchemaTables, TTableSchema
+from dlt.common.storages.load_storage import ParsedLoadJobFileName
 from dlt.destinations.impl.destination.destination import DestinationClient
 from dlt.destinations.sql_client import WithSqlClient
 
 from dlt_altertable.api import execute_sql
 from dlt_altertable.configuration import AltertableClientConfiguration
+from dlt_altertable.destination import upsert_params
 from dlt_altertable.sql_client import AltertableSqlClient
 from dlt_altertable.table_schema import (
     create_or_evolve_table,
     qualified_schema_name,
     qualified_table_name,
+    sql_type,
 )
 
 
 class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
     config: AltertableClientConfiguration
+
+    def verify_schema(
+        self,
+        only_tables: Iterable[str] | None = None,
+        new_jobs: Iterable[ParsedLoadJobFileName] | None = None,
+    ) -> list[PreparedTableSchema]:
+        tables = super().verify_schema(only_tables or (), new_jobs or ())
+        for table in tables:
+            upsert_params(cast(TTableSchema, table))
+            for column in table["columns"].values():
+                sql_type(column)
+        return tables
 
     @property
     def sql_client_class(self) -> type[AltertableSqlClient]:

@@ -1,11 +1,34 @@
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import dlt
 import pyarrow as pa
 import pytest
 from dlt.common.destination.exceptions import DestinationTerminalException
+from dlt.pipeline.exceptions import PipelineStepFailed
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize("write_disposition", ["append", "replace", "merge"])
+def test_invalid_decimal_stops_the_load_before_creating_schema(
+    pipeline_factory, write_disposition
+) -> None:
+    pipeline = pipeline_factory("invalid_decimal")
+    valid = dlt.resource([{"id": 1}], name="valid")
+    invalid = dlt.resource(
+        [{"id": 1, "value": Decimal("0")}],
+        name="invalid",
+        write_disposition=write_disposition,
+        primary_key="id",
+        columns={"value": {"data_type": "decimal", "precision": 39, "scale": 0}},
+    )
+
+    with pytest.raises(PipelineStepFailed, match="invalid decimal precision or scale"):
+        pipeline.run([valid, invalid])
+
+    with pipeline.sql_client() as sql_client:
+        assert sql_client.has_dataset() is False
 
 
 def test_loaded_arrow_types_round_trip(pipeline_factory) -> None:
