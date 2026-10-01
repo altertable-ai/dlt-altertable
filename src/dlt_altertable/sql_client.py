@@ -1,3 +1,4 @@
+import re
 from collections.abc import Generator, Iterator
 from contextlib import closing, contextmanager, suppress
 from typing import Any, AnyStr, cast
@@ -7,15 +8,17 @@ import pyarrow.parquet as pq
 import requests
 from dlt.common.destination import DestinationCapabilitiesContext
 from dlt.common.destination.dataset import DBApiCursor
+from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.libs.pyarrow import UnsupportedArrowTypeException, get_column_type_from_py_arrow
 from dlt.common.schema.typing import TColumnSchema
-from dlt.destinations.sql_client import DBApiCursorImpl, SqlClientBase
+from dlt.destinations.exceptions import DatabaseUndefinedRelation
+from dlt.destinations.sql_client import DBApiCursorImpl, SqlClientBase, raise_database_error
 
 from dlt_altertable import api
 from dlt_altertable.configuration import AltertableClientConfiguration
 
 
-class ArrowTableCursor:
+class BufferedArrowCursor:
     def __init__(self, table: pa.Table) -> None:
         self.table: pa.Table | None = table
         self.row_offset = 0
@@ -27,9 +30,9 @@ class ArrowTableCursor:
     def fetch_arrow(self, chunk_size: int | None = None) -> pa.Table:
         if self.table is None:
             raise RuntimeError("The query cursor is closed.")
-        if chunk_size is not None and chunk_size <= 0:
-            raise ValueError("chunk size must be greater than zero")
-        result = self.table.slice(self.row_offset, chunk_size)
+        if chunk_size is not None and chunk_size < 0:
+            raise ValueError("chunk size must not be negative")
+        result = self.table.slice(self.row_offset, chunk_size or None)
         self.row_offset += result.num_rows
         return result
 
@@ -51,8 +54,11 @@ class ArrowTableCursor:
         self.table = None
 
 
-class DltArrowCursor(DBApiCursorImpl):
-    native_cursor: ArrowTableCursor
+class ArrowResultCursor(DBApiCursorImpl):
+    native_cursor: BufferedArrowCursor
+
+    def __init__(self, table: pa.Table) -> None:
+        super().__init__(cast(DBApiCursor, BufferedArrowCursor(table)))
 
     def _set_default_schema_columns(self) -> None:
         super()._set_default_schema_columns()
@@ -64,7 +70,7 @@ class DltArrowCursor(DBApiCursorImpl):
                 )
 
     def iter_arrow(self, chunk_size: int | None) -> Generator[pa.Table, None, None]:
-        if chunk_size is None:
+        if not chunk_size:
             yield self.native_cursor.fetch_arrow()
             return
         while (table := self.native_cursor.fetch_arrow(chunk_size)).num_rows:
@@ -114,6 +120,15 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
 
     @staticmethod
     def _make_database_exception(ex: Exception) -> Exception:
+        error_detail = (
+            str(ex).partition(" failed with HTTP ")[2]
+            or str(ex).partition(" failed mid-stream: ")[2]
+        )
+        if isinstance(ex, (DestinationTerminalException, RuntimeError)) and re.search(
+            r"(?:Catalog|Binder) Error: (?:Table|Schema|Catalog) .* does not exist",
+            error_detail.partition("\n")[0],
+        ):
+            return DatabaseUndefinedRelation(ex)
         return ex
 
     @staticmethod
@@ -122,20 +137,21 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
             raise NotImplementedError("Altertable HTTP queries do not support parameter binding.")
         return query.decode("utf-8") if isinstance(query, bytes) else query
 
+    @raise_database_error
     def execute_sql(self, sql: AnyStr, *args: Any, **kwargs: Any) -> list[list]:
         statement = self._query_text(sql, args, kwargs)
         self._ensure_native_conn()
         return api.execute_sql(self.config, statement, dataset_name=self.dataset_name)
 
     @contextmanager
+    @raise_database_error
     def execute_query(self, query: AnyStr, *args: Any, **kwargs: Any) -> Iterator[DBApiCursor]:
         statement = self._query_text(query, args, kwargs)
         self._ensure_native_conn()
-        response = api.post_query(
+        parquet_response = api.post_query(
             self.config, statement, output_format="parquet", dataset_name=self.dataset_name
         )
-        # ponytail: responses are buffered; use streaming Parquet files if result memory matters.
-        table = pq.ParquetFile(pa.BufferReader(response.content)).read()
-        # dlt's native cursor annotation includes conversions provided by this wrapper.
-        with closing(DltArrowCursor(cast(DBApiCursor, ArrowTableCursor(table)))) as cursor:
+        result_table = pq.ParquetFile(pa.BufferReader(parquet_response.content)).read()
+        del parquet_response
+        with closing(ArrowResultCursor(result_table)) as cursor:
             yield cursor

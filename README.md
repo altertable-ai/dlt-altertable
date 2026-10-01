@@ -52,8 +52,10 @@ catalog = "lakehouse"
 dataset_name = "crm"
 username = "..."
 password = "..."
-# port = 443, tls = true and compute_size = "XS" (for schema queries) are the defaults
 ```
+
+The defaults are `port=443`, `tls=true`, and `compute_size="XS"`. The compute size applies to
+schema queries and dataset reads.
 
 Every setting can also come from dlt's environment variables, which override the toml file
 (`DESTINATION__ALTERTABLE__HOST`, `DESTINATION__ALTERTABLE__PASSWORD`, and so on), or be passed
@@ -82,8 +84,8 @@ table = dataset.contacts.arrow()
 `dataset.contacts.df()` uses pandas' default types, so nullable integers become floats and lose
 precision above 2**53. Keep them with `table.to_pandas(types_mapper=pd.ArrowDtype)`.
 
-Reads buffer the full result in memory, even when iterating chunks. Parameter binding and
-transactions are unsupported.
+Reads buffer the full result in memory, even when iterating chunks. Use `.limit()` for samples.
+Parameter binding and transactions are unsupported.
 
 ## Check the catalog before loading
 
@@ -216,7 +218,7 @@ uvx ty check src
 
 Unit tests need no server. CI also runs `tests/integration` against
 [altertable-mock](https://github.com/altertable-ai/altertable-mock), with a separate schema per
-test. Tests cover state recovery, incomplete loads, deleted storage, and dataset reads.
+test.
 Run them locally:
 
 ```bash

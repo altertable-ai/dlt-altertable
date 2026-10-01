@@ -4,6 +4,7 @@ from decimal import Decimal
 import pyarrow as pa
 import pytest
 from dlt.common.destination.exceptions import DestinationTerminalException
+from dlt.destinations.exceptions import DatabaseUndefinedRelation
 
 pytestmark = pytest.mark.integration
 
@@ -79,8 +80,11 @@ def test_dataset_preserves_result_types(pipeline_factory) -> None:
 def test_query_failures_are_not_empty_results(pipeline_factory) -> None:
     pipeline = pipeline_factory("valid")
     pipeline.run([{"id": 1}], table_name="events")
-    with pytest.raises((RuntimeError, DestinationTerminalException), match="missing_table"):
+    with pytest.raises(DatabaseUndefinedRelation, match="missing_table"):
         pipeline.dataset()("SELECT * FROM missing_table", _execute_raw_query=True).fetchall()
+    with pipeline.sql_client() as sql_client:
+        with pytest.raises(DatabaseUndefinedRelation, match="missing_table"):
+            sql_client.execute_sql("SELECT * FROM missing_table")
     invalid_pipeline = pipeline_factory("invalid")
     invalid_pipeline.destination.config_params["password"] = "wrong-password"
     with pytest.raises(DestinationTerminalException, match="401"):
