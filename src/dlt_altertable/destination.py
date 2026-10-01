@@ -1,9 +1,12 @@
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import dlt
+import pyarrow as pa
+import pyarrow.parquet as pq
 from dlt.common.configuration import ConfigurationValueError
 from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
 from dlt.common.destination import DestinationCapabilitiesContext
+from dlt.common.destination.configuration import ParquetFormatConfiguration
 from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.schema import TTableSchema
 from dlt.common.schema.utils import (
@@ -102,9 +105,14 @@ def _upload(
         "upsert" if upsert is not None else upload_mode(table, table_name in already_replaced)
     )
 
-    if ingest_mode != "overwrite" and table_name not in already_evolved:
-        if create_or_evolve_table(config, table):
-            already_evolved.append(table_name)
+    if ingest_mode != "overwrite":
+        parquet_schema = pq.read_schema(parquet_file_path)
+        if table_name not in already_evolved or any(
+            pa.types.is_uint64(field.type) for field in parquet_schema
+        ):
+            if create_or_evolve_table(config, table, parquet_schema):
+                if table_name not in already_evolved:
+                    already_evolved.append(table_name)
 
     params = {
         "catalog": cast(str, config.catalog),
@@ -146,6 +154,8 @@ class altertable(CustomDestination):
     def _raw_capabilities(self) -> DestinationCapabilitiesContext:
         caps = super()._raw_capabilities()
         caps.sqlglot_dialect = "duckdb"
+        caps.max_timestamp_precision = 9
+        caps.parquet_format = ParquetFormatConfiguration(version="2.6")
         caps.escape_identifier = escape_postgres_identifier
         caps.escape_literal = escape_duckdb_literal
         caps.supported_merge_strategies = ["upsert"]

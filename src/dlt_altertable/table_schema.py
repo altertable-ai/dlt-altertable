@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import cast
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from dlt.common import logger
 from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
@@ -47,7 +48,7 @@ def sql_type(column: TColumnSchema) -> str:
             )
         return f"DECIMAL({precision},{scale})"
     if column["data_type"] == "timestamp" and column.get("timezone") is False:
-        return "TIMESTAMP"
+        return "TIMESTAMP_NS" if (column.get("precision") or 6) > 6 else "TIMESTAMP"
     return SQL_TYPES[cast(str, column["data_type"])]
 
 
@@ -62,11 +63,13 @@ def qualified_table_name(config: AltertableClientConfiguration, table_name: str)
     return f"{qualified_schema_name(config)}.{escape_postgres_identifier(table_name)}"
 
 
-def create_table(config: AltertableClientConfiguration, table: TTableSchema) -> None:
+def create_table(
+    config: AltertableClientConfiguration, table: TTableSchema, column_types: dict[str, str]
+) -> None:
     table_name = cast(str, table["name"])
     columns = ", ".join(
-        f"{escape_postgres_identifier(name)} {sql_type(column)}"
-        for name, column in table["columns"].items()
+        f"{escape_postgres_identifier(name)} {data_type}"
+        for name, data_type in column_types.items()
     )
     execute_sql(
         config,
@@ -82,34 +85,49 @@ def create_table(config: AltertableClientConfiguration, table: TTableSchema) -> 
     )
 
 
-def create_or_evolve_table(config: AltertableClientConfiguration, table: TTableSchema) -> bool:
+def create_or_evolve_table(
+    config: AltertableClientConfiguration,
+    table: TTableSchema,
+    parquet_schema: pa.Schema | None = None,
+) -> bool:
     """Creating the table from dlt's typed schema keeps column types and later evolution
     deliberate instead of whatever the server would infer from the first file. A table left by
     an earlier load must also gain the columns that dlt's schema evolution added since.
 
     Returns whether the lookup found an existing table, the only answer worth caching for the
     rest of the load: a CREATE is never read back to confirm what the table now holds."""
+    column_types = {name: sql_type(column) for name, column in table["columns"].items()}
+    if parquet_schema is not None:
+        for field in parquet_schema:
+            if field.name in column_types and pa.types.is_uint64(field.type):
+                column_types[field.name] = "DECIMAL(20,0)"
     table_name = cast(str, table["name"])
     rows = execute_sql(
         config,
-        "SELECT column_name FROM information_schema.columns "
+        "SELECT column_name, data_type FROM information_schema.columns "
         f"WHERE table_catalog = {escape_duckdb_literal(config.catalog)} "
         f"AND table_schema = {escape_duckdb_literal(config.dataset_name)} "
         f"AND table_name = {escape_duckdb_literal(table_name)}",
     )
-    existing = {row[0] for row in rows}
+    existing = dict(rows)
     if not existing:
-        create_table(config, table)
+        create_table(config, table, column_types)
         return False
-    for name, column in table["columns"].items():
+    for name, data_type in column_types.items():
         if name not in existing:
             execute_sql(
                 config,
                 f"ALTER TABLE {qualified_table_name(config, table_name)} "
-                f"ADD COLUMN IF NOT EXISTS {escape_postgres_identifier(name)} {sql_type(column)}",
+                f"ADD COLUMN IF NOT EXISTS {escape_postgres_identifier(name)} {data_type}",
             )
             logger.info(
                 f"Added column {name} to {config.catalog}.{config.dataset_name}.{table_name}"
+            )
+        elif existing[name] == "BIGINT" and data_type == "DECIMAL(20,0)":
+            execute_sql(
+                config,
+                f"ALTER TABLE {qualified_table_name(config, table_name)} "
+                f"ALTER COLUMN {escape_postgres_identifier(name)} TYPE DECIMAL(20,0)",
             )
     return True
 
