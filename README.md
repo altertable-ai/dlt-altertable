@@ -52,8 +52,10 @@ catalog = "lakehouse"
 dataset_name = "crm"
 username = "..."
 password = "..."
-# port = 443, tls = true and compute_size = "XS" (for schema queries) are the defaults
 ```
+
+The defaults are `port=443`, `tls=true`, and `compute_size="XS"`. The compute size applies to
+schema queries and dataset reads.
 
 Every setting can also come from dlt's environment variables, which override the toml file
 (`DESTINATION__ALTERTABLE__HOST`, `DESTINATION__ALTERTABLE__PASSWORD`, and so on), or be passed
@@ -70,6 +72,21 @@ Two notes on naming:
   target schema is the destination's own `dataset_name` setting.
 - To point several pipelines at different backends, name each configuration:
   `altertable(destination_name="altertable_staging")` reads `[destination.altertable_staging]`.
+
+## Read loaded data
+
+```python
+dataset = pipeline.dataset()
+rows = dataset.contacts.select("id", "email").limit(10).fetchall()
+table = dataset.contacts.arrow()
+```
+
+Use `.df()` for pandas DataFrames (requires `pandas`).
+
+Reads use the configured `dataset_name`; `dlt.dataset()` cannot override it.
+
+Reads buffer the full result in memory, even when iterating chunks. Use `.limit()` for samples.
+Parameter binding and transactions are unsupported.
 
 ## Check the catalog before loading
 
@@ -202,7 +219,7 @@ uvx ty check src
 
 Unit tests need no server. CI also runs `tests/integration` against
 [altertable-mock](https://github.com/altertable-ai/altertable-mock), with a separate schema per
-test. These tests cover fresh-runner recovery, failed completion, and deleted storage.
+test.
 Run them locally:
 
 ```bash
