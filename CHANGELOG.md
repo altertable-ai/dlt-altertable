@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.5](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.4...dlt-altertable-v0.1.5) (2026-10-01)
+
+
+### Bug Fixes
+
+* **ci:** keep the lockfile in sync with releases ([09bef09](https://github.com/altertable-ai/dlt-altertable/commit/09bef09e986d40b4e54c2958428d9c768d29fd01))
+* **load:** validate schema before loading ([6e9b8f5](https://github.com/altertable-ai/dlt-altertable/commit/6e9b8f5ed99293018ece6c6fdd1dd9cef502a382))
+* **types:** preserve DuckDB column precision ([0bae23c](https://github.com/altertable-ai/dlt-altertable/commit/0bae23c086559a62cd4e5d91fc9cd707979da784))
+* **verify:** report Arrow loads without load IDs ([0bae23c](https://github.com/altertable-ai/dlt-altertable/commit/0bae23c086559a62cd4e5d91fc9cd707979da784))
+
+
+### Documentation
+
+* shorten the README ([e665c5b](https://github.com/altertable-ai/dlt-altertable/commit/e665c5b49292adae5df4fc2680673c9acb853637))
+
 ## [0.1.4](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.3...dlt-altertable-v0.1.4) (2026-10-01)
 
 
