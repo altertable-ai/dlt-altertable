@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.4](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.3...dlt-altertable-v0.1.4) (2026-10-01)
+
+
+### Features
+
+* **state:** restore completed dlt pipeline state ([#15](https://github.com/altertable-ai/dlt-altertable/issues/15)) ([03b75cb](https://github.com/altertable-ai/dlt-altertable/commit/03b75cb3ba76e609dceca4604295f5d766e4bfa5))
+
+
+### Bug Fixes
+
+* **ci:** refresh the lockfile for the 0.1.3 release ([#13](https://github.com/altertable-ai/dlt-altertable/issues/13)) ([b1de48d](https://github.com/altertable-ai/dlt-altertable/commit/b1de48d1beff4f055b7c1a78aed02aba457001e5))
+
 ## [0.1.3](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.2...dlt-altertable-v0.1.3) (2026-08-25)
 
 
