@@ -200,6 +200,12 @@ def verify_table(
         return [f"{table_name}: the load includes this table, but it does not exist"]
 
     disposition, key_columns, upsert_skips_stale_rows = contract
+    if disposition != REPLACE and C_DLT_LOAD_ID not in table_definitions[0]["columns"]:
+        return [
+            f"{table_name}: this table has no _dlt_load_id column, so this load cannot be "
+            "reconciled. For Arrow inputs, enable NORMALIZE__PARQUET_NORMALIZER__ADD_DLT_LOAD_ID "
+            "before loading."
+        ]
     problems: list[str] = []
     if normalized_rows is None:
         problems.append(

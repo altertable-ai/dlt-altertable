@@ -21,8 +21,6 @@ Supported: Python 3.12 to 3.14, `dlt >= 1.30, < 2`.
 
 ## Use
 
-For unsigned integers and nanosecond timestamps, see [data types](docs/data-types.md).
-
 ```python
 import dlt
 from dlt_altertable import altertable
