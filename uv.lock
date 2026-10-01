@@ -244,7 +244,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "pandas", specifier = "~=3.0.6" },
+    { name = "pandas", specifier = "~=3.0" },
     { name = "pytest", specifier = "~=8.4" },
     { name = "pytest-xdist", specifier = "~=3.8" },
     { name = "ruff", specifier = "~=0.14" },
