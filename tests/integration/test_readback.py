@@ -77,6 +77,15 @@ def test_dataset_preserves_result_types(pipeline_factory) -> None:
     assert empty_uuid.schema == pa.schema([("identifier", pa.string())])
 
 
+def test_has_dataset_reports_whether_the_schema_exists(pipeline_factory) -> None:
+    pipeline = pipeline_factory("original")
+    with pipeline.sql_client() as sql_client:
+        assert sql_client.has_dataset() is False
+    pipeline.run([{"id": 1}], table_name="events")
+    with pipeline.sql_client() as sql_client:
+        assert sql_client.has_dataset() is True
+
+
 def test_query_failures_are_not_empty_results(pipeline_factory) -> None:
     pipeline = pipeline_factory("valid")
     pipeline.run([{"id": 1}], table_name="events")

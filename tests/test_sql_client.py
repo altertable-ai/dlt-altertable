@@ -124,6 +124,21 @@ def test_queries_use_the_configured_catalog_and_current_dataset(
                 assert cursor.fetchall() == [(1,)]
 
 
+@pytest.mark.parametrize(("rows", "exists"), [([[1]], True), ([], False)], ids=["found", "missing"])
+def test_has_dataset_looks_up_the_current_dataset_without_scoping_to_it(
+    sql_client, monkeypatch, rows, exists
+) -> None:
+    def post_query(url, *, json, **kwargs):
+        assert "schema" not in json
+        assert "catalog_name = E'lakehouse' AND schema_name = E'other_schema'" in json["statement"]
+        return query_response(rows)
+
+    monkeypatch.setattr("dlt_altertable.api.session.post", post_query)
+
+    with sql_client, sql_client.with_alternative_dataset_name("other_schema"):
+        assert sql_client.has_dataset() is exists
+
+
 @pytest.mark.parametrize(
     ("query_method", "status_code"),
     [

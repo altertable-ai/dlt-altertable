@@ -6,6 +6,7 @@ from typing import Any, AnyStr, cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
+from dlt.common.data_writers.escape import escape_duckdb_literal
 from dlt.common.destination import DestinationCapabilitiesContext
 from dlt.common.destination.dataset import DBApiCursor
 from dlt.common.destination.exceptions import DestinationTerminalException
@@ -108,6 +109,18 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
         if casefold:
             catalog = self.capabilities.casefold_identifier(catalog)
         return self.capabilities.escape_identifier(catalog) if quote else catalog
+
+    def has_dataset(self) -> bool:
+        """Looks the schema up without scoping the query to it: a scoped query fails when the
+        schema does not exist."""
+        self._ensure_native_conn()
+        rows = api.execute_sql(
+            self.config,
+            "SELECT 1 FROM information_schema.schemata "
+            f"WHERE catalog_name = {escape_duckdb_literal(self.database_name)} "
+            f"AND schema_name = {escape_duckdb_literal(self.dataset_name)}",
+        )
+        return bool(rows)
 
     def begin_transaction(self) -> Any:
         raise NotImplementedError("Altertable HTTP queries do not support transactions.")
