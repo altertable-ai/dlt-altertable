@@ -133,10 +133,7 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
 
     @staticmethod
     def _make_database_exception(ex: Exception) -> Exception:
-        error_detail = (
-            str(ex).partition(" failed with HTTP ")[2]
-            or str(ex).partition(" failed mid-stream: ")[2]
-        )
+        error_detail = str(ex).partition(" failed with HTTP ")[2]
         if isinstance(ex, (DestinationTerminalException, RuntimeError)) and re.search(
             r"(?:Catalog|Binder) Error: (?:(?:Table|Schema|Catalog) .* does not exist"
             r"|SET schema: No catalog \+ schema named )",
@@ -151,11 +148,9 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
             raise NotImplementedError("Altertable HTTP queries do not support parameter binding.")
         return query.decode("utf-8") if isinstance(query, bytes) else query
 
-    @raise_database_error
-    def execute_sql(self, sql: AnyStr, *args: Any, **kwargs: Any) -> list[list]:
-        statement = self._query_text(sql, args, kwargs)
-        self._ensure_native_conn()
-        return api.execute_sql(self.config, statement, dataset_name=self.dataset_name)
+    def execute_sql(self, sql: AnyStr, *args: Any, **kwargs: Any) -> list[tuple[Any, ...]]:
+        with self.execute_query(sql, *args, **kwargs) as cursor:
+            return cursor.fetchall()
 
     @contextmanager
     @raise_database_error

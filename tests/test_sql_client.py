@@ -60,6 +60,8 @@ def test_arrow_preserves_types_and_duplicate_names(sql_client, monkeypatch) -> N
         assert cursor.arrow().schema == table.schema
     with sql_client, sql_client.execute_query("SELECT values") as cursor:
         assert cursor.fetchall() == [(None, Decimal("123456789.123"), None)]
+    with sql_client:
+        assert sql_client.execute_sql("SELECT values") == [(None, Decimal("123456789.123"), None)]
 
 
 @pytest.mark.parametrize("row_count", [0, 1], ids=["empty", "null-only"])
@@ -108,17 +110,14 @@ def test_queries_use_the_configured_catalog_and_current_dataset(
         assert json["catalog"] == "lakehouse"
         assert json["schema"] == "other_schema"
         assert json["compute_size"] == "XS"
-        return (
-            parquet_response(pa.table({"id": [1]}))
-            if json.get("format") == "parquet"
-            else query_response([[1]])
-        )
+        assert json["format"] == "parquet"
+        return parquet_response(pa.table({"id": [1]}))
 
     monkeypatch.setattr("dlt_altertable.api.session.post", post_query)
 
     with sql_client, sql_client.with_alternative_dataset_name("other_schema"):
         if query_method == "execute_sql":
-            assert sql_client.execute_sql("SELECT id FROM events") == [[1]]
+            assert sql_client.execute_sql("SELECT id FROM events") == [(1,)]
         else:
             with sql_client.execute_query("SELECT id FROM events") as cursor:
                 assert cursor.fetchall() == [(1,)]
@@ -142,7 +141,6 @@ def test_has_dataset_looks_up_the_current_dataset_without_scoping_to_it(
 @pytest.mark.parametrize(
     ("query_method", "status_code"),
     [
-        pytest.param("execute_sql", 200, id="ndjson-error"),
         pytest.param("execute_sql", 400, id="sql-http-error"),
         pytest.param("execute_query", 400, id="terminal-parquet-error"),
         pytest.param("execute_query", 500, id="transient-parquet-error"),
@@ -167,9 +165,7 @@ def test_missing_tables_raise_the_error_dlt_handles(
 ) -> None:
     response = requests.Response()
     response.status_code = status_code
-    response._content = (
-        query_response([{"error": error}]).text.encode() if status_code == 200 else error.encode()
-    )
+    response._content = error.encode()
     monkeypatch.setattr("dlt_altertable.api.session.post", lambda *args, **kwargs: response)
 
     with sql_client, pytest.raises(DatabaseUndefinedRelation, match="missing_table") as failure:

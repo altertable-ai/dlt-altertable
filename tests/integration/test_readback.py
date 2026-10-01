@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pyarrow as pa
@@ -47,7 +47,7 @@ def test_dataset_reads_from_the_configured_schema(mock_config, pipeline_factory)
     assert [chunk.num_rows for chunk in chunks] == [2, 2, 1]
     assert pa.concat_tables(chunks).column("id").to_pylist() == [1, 2, 3, 4, 5]
     with pipeline.sql_client() as sql_client:
-        assert sql_client.execute_sql("SELECT id FROM events WHERE id = 1") == [[1]]
+        assert sql_client.execute_sql("SELECT id FROM events WHERE id = 1") == [(1,)]
 
 
 def test_dataset_preserves_result_types(pipeline_factory) -> None:
@@ -65,11 +65,14 @@ def test_dataset_preserves_result_types(pipeline_factory) -> None:
         assert pa.types.is_timestamp(timestamp_type)
         assert timestamp_type.unit == "us"
         assert timestamp_type.tz in {"UTC", "Etc/UTC"}
-    result = dataset(
-        "SELECT 12.345::DECIMAL(12,3) AS amount, TIMESTAMPTZ '2026-09-30 12:00:00+00' AS instant",
-        _execute_raw_query=True,
-    ).fetchone()
-    assert result == (Decimal("12.345"), datetime(2026, 9, 30, 12, tzinfo=UTC))
+    query = (
+        "SELECT 12.345::DECIMAL(12,3) AS amount, TIMESTAMPTZ '2026-09-30 12:00:00+00' AS instant, "
+        "DATE '2026-01-02' AS day"
+    )
+    expected = (Decimal("12.345"), datetime(2026, 9, 30, 12, tzinfo=UTC), date(2026, 1, 2))
+    assert dataset(query, _execute_raw_query=True).fetchone() == expected
+    with pipeline.sql_client() as sql_client:
+        assert sql_client.execute_sql(query) == [expected]
     empty_uuid = dataset(
         "SELECT NULL::UUID AS identifier WHERE FALSE", _execute_raw_query=True
     ).arrow()
