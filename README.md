@@ -81,12 +81,9 @@ rows = dataset.contacts.select("id", "email").limit(10).fetchall()
 table = dataset.contacts.arrow()
 ```
 
-`dataset.contacts.df()` needs pandas, which this package does not install. It uses pandas' default
-types, so nullable integers become floats and lose precision above 2**53. Keep them with
-`table.to_pandas(types_mapper=pd.ArrowDtype)`.
+Use `.df()` for pandas DataFrames (requires `pandas`).
 
-Reads target the configured `dataset_name`, as loads do. `dlt.dataset(destination, "marketing")`
-reads that same schema and ignores `"marketing"`.
+Reads use the configured `dataset_name`; `dlt.dataset()` cannot override it.
 
 Reads buffer the full result in memory, even when iterating chunks. Use `.limit()` for samples.
 Parameter binding and transactions are unsupported.
