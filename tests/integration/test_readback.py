@@ -147,3 +147,38 @@ def test_query_failures_are_not_empty_results(pipeline_factory) -> None:
         unauthenticated_pipeline.dataset(schema=loaded_pipeline.default_schema)(
             "SELECT 1", _execute_raw_query=True
         ).fetchall()
+
+
+@pytest.mark.parametrize("write_disposition", ["append", "merge"])
+def test_integer_widening_and_nanosecond_timestamps_round_trip(
+    pipeline_factory, monkeypatch, write_disposition
+) -> None:
+    monkeypatch.delenv("DATA_WRITER__VERSION", raising=False)
+    pipeline = pipeline_factory("precision")
+    values = [-(2**63), 2**64 - 1, -1]
+    arrow_types = [pa.int64(), pa.uint64(), pa.int64()]
+    instants = [1_000_000_001, 1_000_000_002, 1_000_000_003]
+
+    for value, arrow_type, instant in zip(values, arrow_types, instants, strict=True):
+        source = pa.table(
+            {
+                "value": pa.array([value], arrow_type),
+                "instant": pa.array([instant], pa.timestamp("ns")),
+            }
+        )
+        pipeline.run(
+            dlt.resource(
+                source,
+                name="events",
+                write_disposition=write_disposition,
+                primary_key="value",
+                columns={"instant": {"timezone": False}},
+            )
+        )
+
+    result = pipeline.dataset().events.select("value", "instant").order_by("instant").arrow()
+
+    assert result.schema.field("value").type == pa.decimal128(20, 0)
+    assert result.column("value").to_pylist() == [Decimal(value) for value in values]
+    assert result.schema.field("instant").type == pa.timestamp("ns")
+    assert result.column("instant").cast(pa.int64()).to_pylist() == instants

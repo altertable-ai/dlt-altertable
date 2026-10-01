@@ -150,6 +150,8 @@ class FakeServer:
                 )
             if statement.startswith("SELECT count"):
                 return self.count_query_response(statement)
+            if statement.startswith("SELECT column_name, data_type"):
+                return query_response([[column, "BIGINT"] for column in self.existing_columns])
             return query_response([[column] for column in self.existing_columns])
 
         table_name = params["table"]
@@ -198,3 +200,35 @@ def write_parquet(tmp_path: Path):
         return str(path)
 
     return write
+
+
+@pytest.fixture
+def connection(tmp_path: Path, request):
+    import duckdb
+
+    connection = duckdb.connect()
+    try:
+        connection.execute("INSTALL ducklake")
+        connection.execute("LOAD ducklake")
+    except duckdb.Error as error:
+        pytest.skip(f"DuckDB cannot load its ducklake extension: {error}")
+    connection.execute(
+        f"ATTACH 'ducklake:{tmp_path}/metadata.duckdb' AS lakehouse "
+        f"(DATA_PATH '{tmp_path}/data/', METADATA_SCHEMA '{getattr(request, 'param', 'main')}')"
+    )
+    connection.execute("CALL lakehouse.set_option('data_inlining_row_limit', 0)")
+    yield connection
+    connection.close()
+
+
+def worker_ingest_into(connection):
+    def upload(config, endpoint, params, path, action):
+        assert endpoint == "upload"
+        target = f'lakehouse.raw."{params["table"]}"'
+        if params["mode"] == "overwrite":
+            connection.execute(f"DROP TABLE IF EXISTS {target}")
+            connection.execute(f"CREATE TABLE {target} AS SELECT * FROM read_parquet(?)", [path])
+        else:
+            connection.execute(f"INSERT INTO {target} SELECT * FROM read_parquet(?)", [path])
+
+    return upload
