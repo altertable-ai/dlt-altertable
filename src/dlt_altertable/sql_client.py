@@ -138,7 +138,8 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
             or str(ex).partition(" failed mid-stream: ")[2]
         )
         if isinstance(ex, (DestinationTerminalException, RuntimeError)) and re.search(
-            r"(?:Catalog|Binder) Error: (?:Table|Schema|Catalog) .* does not exist",
+            r"(?:Catalog|Binder) Error: (?:(?:Table|Schema|Catalog) .* does not exist"
+            r"|SET schema: No catalog \+ schema named )",
             error_detail.partition("\n")[0],
         ):
             return DatabaseUndefinedRelation(ex)

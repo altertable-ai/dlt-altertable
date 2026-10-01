@@ -148,10 +148,23 @@ def test_has_dataset_looks_up_the_current_dataset_without_scoping_to_it(
         pytest.param("execute_query", 500, id="transient-parquet-error"),
     ],
 )
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param("Catalog Error: Table with name missing_table does not exist!", id="table"),
+        pytest.param(
+            'Catalog Error: SET schema: No catalog + schema named "lakehouse.missing" found.',
+            id="qualified-schema",
+        ),
+        pytest.param(
+            'Catalog Error: SET schema: No catalog + schema named "missing" found.',
+            id="unqualified-schema",
+        ),
+    ],
+)
 def test_missing_tables_raise_the_error_dlt_handles(
-    sql_client, monkeypatch, query_method, status_code
+    sql_client, monkeypatch, query_method, status_code, error
 ) -> None:
-    error = "Catalog Error: Table with name missing_table does not exist!"
     response = requests.Response()
     response.status_code = status_code
     response._content = (
