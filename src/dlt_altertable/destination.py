@@ -148,6 +148,7 @@ class altertable(CustomDestination):
         caps.sqlglot_dialect = "duckdb"
         caps.escape_identifier = escape_postgres_identifier
         caps.escape_literal = escape_duckdb_literal
+        caps.supported_merge_strategies = ["upsert"]
         return caps
 
     @property

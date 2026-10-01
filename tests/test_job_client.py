@@ -17,6 +17,63 @@ def pipeline(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("hints", "message"),
+    [
+        ({"primary_key": None}, "merge without a primary_key"),
+        (
+            {"write_disposition": {"disposition": "merge", "strategy": "scd2"}},
+            "`scd2` merge strategy not supported",
+        ),
+        ({"merge_key": "value"}, "merge_key"),
+        ({"columns": {"deleted": {"hard_delete": True}}}, "hard_delete"),
+        ({"columns": {"value": {"dedup_sort": "asc"}}}, "dedup_sort 'asc'"),
+        ({"columns": {"id": {"nullable": True}}}, "primary_key columns must be non-nullable"),
+        ({"primary_key": "id,part"}, "contain a comma"),
+        ({"columns": {"id,part": {"dedup_sort": "desc"}}}, "contain a comma"),
+        (
+            {"write_disposition": "append", "columns": {"value": {"data_type": "wei"}}},
+            "has type wei",
+        ),
+        (
+            {"write_disposition": "replace", "columns": {"value": {"data_type": "wei"}}},
+            "has type wei",
+        ),
+        (
+            {"columns": {"value": {"data_type": "decimal", "precision": 39, "scale": 0}}},
+            "invalid decimal precision or scale",
+        ),
+    ],
+    ids=[
+        "missing_primary_key",
+        "scd2",
+        "merge_key",
+        "hard_delete",
+        "ascending_dedup_sort",
+        "nullable_primary_key",
+        "comma_primary_key",
+        "comma_cursor",
+        "wei_append",
+        "wei_replace",
+        "decimal_precision",
+    ],
+)
+def test_invalid_table_stops_the_load_before_any_table_is_written(server, pipeline, hints, message):
+    options = {"write_disposition": "merge", "primary_key": "id"} | hints
+    invalid = dlt.resource(
+        [{"id": 1, "value": 1, "deleted": False, "id,part": 1}],
+        name="invalid",
+        **options,
+    )
+    valid = dlt.resource([{"id": 1}], name="valid")
+
+    with pytest.raises(PipelineStepFailed, match=message):
+        pipeline.run([valid, invalid])
+
+    assert server.uploads == []
+    assert all(statement.startswith("SELECT") for statement in server.statements)
+
+
+@pytest.mark.parametrize(
     "options", [{}, {"dry_run": True}, {"dry_run": "false"}, {"dry_run": None}, {"dry_run": 0}]
 )
 def test_drop_storage_previews_sql_without_sending_requests(server, pipeline, options):

@@ -38,7 +38,14 @@ def sql_type(column: TColumnSchema) -> str:
             "decimals stop at 38."
         )
     if column["data_type"] == "decimal" and (precision := column.get("precision")) is not None:
-        return f"DECIMAL({precision},{column.get('scale', 0)})"
+        scale = column.get("scale") or 0
+        if not (1 <= precision <= 38 and 0 <= scale <= precision):
+            raise TerminalValueError(
+                f"Column {column['name']} has invalid decimal precision or scale: "
+                f"DECIMAL({precision},{scale}). DuckDB requires precision between 1 and 38 "
+                "and scale between 0 and precision."
+            )
+        return f"DECIMAL({precision},{scale})"
     if column["data_type"] == "timestamp" and column.get("timezone") is False:
         return "TIMESTAMP"
     return SQL_TYPES[cast(str, column["data_type"])]

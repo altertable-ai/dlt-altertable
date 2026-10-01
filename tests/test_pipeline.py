@@ -201,7 +201,7 @@ def merged_on_nullable_primary_key() -> Iterator[list[dict[str, Any]]]:
     ("resource", "unsupported"),
     [
         (merged_on_merge_key, "merge_key"),
-        (merged_with_scd2, "merge strategy 'scd2'"),
+        (merged_with_scd2, "`scd2` merge strategy not supported"),
         (merged_on_nullable_primary_key, "primary_key columns must be non-nullable: id"),
     ],
     ids=["merge_key", "scd2", "nullable_primary_key"],
