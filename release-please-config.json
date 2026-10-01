@@ -6,6 +6,9 @@
       "initial-version": "0.1.0",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
+      "extra-files": [
+        { "type": "toml", "path": "uv.lock", "jsonpath": "$.package[?(@.name.value=='dlt-altertable')].version" }
+      ],
       "changelog-sections": [
         { "type": "feat", "section": "Features", "hidden": false },
         { "type": "fix", "section": "Bug Fixes", "hidden": false },
