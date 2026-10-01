@@ -6,7 +6,6 @@ import pyarrow.parquet as pq
 import pytest
 import requests
 from dlt.common.destination.exceptions import DestinationTerminalException
-from dlt.destinations.exceptions import DatabaseUndefinedRelation
 
 from dlt_altertable import altertable
 from dlt_altertable.sql_client import AltertableSqlClient
@@ -139,46 +138,6 @@ def test_has_dataset_looks_up_the_current_dataset_without_scoping_to_it(
 
 
 @pytest.mark.parametrize(
-    ("query_method", "status_code"),
-    [
-        pytest.param("execute_sql", 400, id="sql-http-error"),
-        pytest.param("execute_query", 400, id="terminal-parquet-error"),
-        pytest.param("execute_query", 500, id="transient-parquet-error"),
-    ],
-)
-@pytest.mark.parametrize(
-    "error",
-    [
-        pytest.param("Catalog Error: Table with name missing_table does not exist!", id="table"),
-        pytest.param(
-            'Catalog Error: SET schema: No catalog + schema named "lakehouse.missing" found.',
-            id="qualified-schema",
-        ),
-        pytest.param(
-            'Catalog Error: SET schema: No catalog + schema named "missing" found.',
-            id="unqualified-schema",
-        ),
-    ],
-)
-def test_missing_tables_raise_the_error_dlt_handles(
-    sql_client, monkeypatch, query_method, status_code, error
-) -> None:
-    response = requests.Response()
-    response.status_code = status_code
-    response._content = error.encode()
-    monkeypatch.setattr("dlt_altertable.api.session.post", lambda *args, **kwargs: response)
-
-    with sql_client, pytest.raises(DatabaseUndefinedRelation, match="missing_table") as failure:
-        if query_method == "execute_sql":
-            sql_client.execute_sql("SELECT * FROM missing_table")
-        else:
-            with sql_client.execute_query("SELECT * FROM missing_table"):
-                pass
-
-    assert failure.value.__cause__ is failure.value.dbapi_exception
-
-
-@pytest.mark.parametrize(
     ("status_code", "body", "expected_error"),
     [
         pytest.param(
@@ -191,22 +150,41 @@ def test_missing_tables_raise_the_error_dlt_handles(
             DestinationTerminalException,
             id="missing-column",
         ),
+        pytest.param(
+            400,
+            b"Catalog Error: Table with name missing_table does not exist!",
+            DestinationTerminalException,
+            id="missing-table-terminal",
+        ),
+        pytest.param(
+            500,
+            b"Catalog Error: Table with name missing_table does not exist!",
+            RuntimeError,
+            id="missing-table-server-error",
+        ),
+        pytest.param(
+            400,
+            b'No catalog + schema named "missing" found.',
+            DestinationTerminalException,
+            id="missing-schema",
+        ),
         pytest.param(500, b"worker failed", RuntimeError, id="worker"),
         pytest.param(200, b"partial parquet stream", pa.ArrowInvalid, id="truncated-parquet"),
     ],
 )
-def test_other_query_errors_keep_their_original_type(
+def test_query_errors_keep_their_original_type(
     sql_client, monkeypatch, status_code, body, expected_error
 ) -> None:
     response = requests.Response()
     response.status_code = status_code
     response._content = body
+    query_with_error_text = (
+        "SELECT 'worker failed with HTTP 400: Catalog Error: Table with name fake does not exist!'"
+    )
     monkeypatch.setattr("dlt_altertable.api.session.post", lambda *args, **kwargs: response)
 
     with sql_client, pytest.raises(expected_error) as failure:
-        with sql_client.execute_query(
-            "SELECT 'Catalog Error: Table with name missing_table does not exist!'"
-        ):
+        with sql_client.execute_query(query_with_error_text):
             pass
 
     assert type(failure.value) is expected_error

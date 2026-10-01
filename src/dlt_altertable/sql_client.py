@@ -1,4 +1,3 @@
-import re
 from collections.abc import Generator, Iterator
 from contextlib import closing, contextmanager, suppress
 from typing import Any, AnyStr, cast
@@ -9,11 +8,9 @@ import requests
 from dlt.common.data_writers.escape import escape_duckdb_literal
 from dlt.common.destination import DestinationCapabilitiesContext
 from dlt.common.destination.dataset import DBApiCursor
-from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.libs.pyarrow import UnsupportedArrowTypeException, get_column_type_from_py_arrow
 from dlt.common.schema.typing import TColumnSchema
-from dlt.destinations.exceptions import DatabaseUndefinedRelation
-from dlt.destinations.sql_client import DBApiCursorImpl, SqlClientBase, raise_database_error
+from dlt.destinations.sql_client import DBApiCursorImpl, SqlClientBase
 
 from dlt_altertable import api
 from dlt_altertable.configuration import AltertableClientConfiguration
@@ -133,13 +130,6 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
 
     @staticmethod
     def _make_database_exception(ex: Exception) -> Exception:
-        error_detail = str(ex).partition(" failed with HTTP ")[2]
-        if isinstance(ex, (DestinationTerminalException, RuntimeError)) and re.search(
-            r"(?:Catalog|Binder) Error: (?:(?:Table|Schema|Catalog) .* does not exist"
-            r"|SET schema: No catalog \+ schema named )",
-            error_detail.partition("\n")[0],
-        ):
-            return DatabaseUndefinedRelation(ex)
         return ex
 
     @staticmethod
@@ -153,7 +143,6 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
             return cursor.fetchall()
 
     @contextmanager
-    @raise_database_error
     def execute_query(self, query: AnyStr, *args: Any, **kwargs: Any) -> Iterator[DBApiCursor]:
         statement = self._query_text(query, args, kwargs)
         self._ensure_native_conn()
