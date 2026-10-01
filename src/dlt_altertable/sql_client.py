@@ -146,9 +146,21 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
     def execute_query(self, query: AnyStr, *args: Any, **kwargs: Any) -> Iterator[DBApiCursor]:
         statement = self._query_text(query, args, kwargs)
         self._ensure_native_conn()
-        parquet_response = api.post_query(
-            self.config, statement, output_format="parquet", dataset_name=self.dataset_name
-        )
+        try:
+            parquet_response = api.post_query(
+                self.config, statement, output_format="parquet", dataset_name=self.dataset_name
+            )
+        except (requests.ConnectionError, requests.exceptions.ChunkedEncodingError) as dropped:
+            # Altertable aborts failed Parquet responses without the error text. The default
+            # format reports it inline, and EXPLAIN surfaces parse, bind and catalog errors
+            # without running the query again.
+            try:
+                api.execute_sql(self.config, f"EXPLAIN {statement}", dataset_name=self.dataset_name)
+            except requests.RequestException:
+                pass
+            except Exception as server_error:
+                raise server_error from dropped
+            raise
         result_table = pq.ParquetFile(pa.BufferReader(parquet_response.content)).read()
         del parquet_response
         with closing(ArrowResultCursor(result_table)) as cursor:

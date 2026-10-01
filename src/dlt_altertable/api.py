@@ -71,8 +71,10 @@ def post_query(
     return response
 
 
-def execute_sql(config: AltertableClientConfiguration, statement: str) -> list[list]:
-    response = post_query(config, statement)
+def execute_sql(
+    config: AltertableClientConfiguration, statement: str, *, dataset_name: str | None = None
+) -> list[list]:
+    response = post_query(config, statement, dataset_name=dataset_name)
     payload = [json.loads(line) for line in response.text.splitlines() if line.strip()]
     for entry in payload:
         if isinstance(entry, dict) and "error" in entry:

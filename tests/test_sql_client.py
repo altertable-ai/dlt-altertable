@@ -188,3 +188,56 @@ def test_query_errors_keep_their_original_type(
             pass
 
     assert type(failure.value) is expected_error
+
+
+@pytest.mark.parametrize(
+    "dropped_response",
+    [
+        requests.ConnectionError("Remote end closed connection without response"),
+        requests.exceptions.ChunkedEncodingError("Response ended prematurely"),
+    ],
+    ids=["closed-before-headers", "truncated-body"],
+)
+def test_dropped_parquet_queries_report_the_server_error(
+    sql_client, monkeypatch, dropped_response
+) -> None:
+    explained = []
+
+    def post_query(url, *, json, **kwargs):
+        if json.get("format") == "parquet":
+            raise dropped_response
+        explained.append(json)
+        return query_response([{"error": "Catalog Error: Table with name missing does not exist!"}])
+
+    monkeypatch.setattr("dlt_altertable.api.session.post", post_query)
+
+    with sql_client, pytest.raises(RuntimeError, match="Catalog Error") as failure:
+        with sql_client.execute_query("SELECT * FROM missing"):
+            pass
+
+    assert failure.value.__cause__ is dropped_response
+    assert [(payload["statement"], payload["schema"]) for payload in explained] == [
+        ("EXPLAIN SELECT * FROM missing", sql_client.dataset_name)
+    ]
+
+
+@pytest.mark.parametrize("explain_fails", [False, True], ids=["plan-succeeds", "network-down"])
+def test_dropped_parquet_queries_without_a_server_error_keep_the_transport_error(
+    sql_client, monkeypatch, explain_fails
+) -> None:
+    dropped_response = requests.exceptions.ChunkedEncodingError("Response ended prematurely")
+
+    def post_query(url, *, json, **kwargs):
+        if json.get("format") == "parquet":
+            raise dropped_response
+        if explain_fails:
+            raise requests.ConnectionError("network down")
+        return query_response([["physical_plan", "PROJECTION"]])
+
+    monkeypatch.setattr("dlt_altertable.api.session.post", post_query)
+
+    with sql_client, pytest.raises(requests.exceptions.ChunkedEncodingError) as failure:
+        with sql_client.execute_query("SELECT CAST('abc' AS INTEGER)"):
+            pass
+
+    assert failure.value is dropped_response
