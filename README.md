@@ -104,6 +104,8 @@ Reads buffer results in memory. Use `.arrow()` for Arrow or `.df()` for pandas.
 
 ## Operational notes
 
+Use `refresh="drop_resources"` to drop and recreate selected resource tables and reset their state.
+
 - Fresh runners restore incremental state with the same pipeline name, catalog, and schema.
   Persist `pipelines_dir` to resume unfinished loads.
 - Keep the one-hour upload timeout: a timed-out request can still complete on the server.

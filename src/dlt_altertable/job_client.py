@@ -81,6 +81,18 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
             return
         execute_sql(self.config, statement)
 
+    def drop_tables(self, *tables: str, delete_schema: bool = True) -> None:
+        for table_name in tables:
+            execute_sql(
+                self.config, f"DROP TABLE IF EXISTS {qualified_table_name(self.config, table_name)}"
+            )
+        if delete_schema and self._table_exists(self.schema.version_table_name):
+            execute_sql(
+                self.config,
+                f"DELETE FROM {qualified_table_name(self.config, self.schema.version_table_name)} "
+                f"WHERE schema_name = {escape_duckdb_literal(self.schema.name)}",
+            )
+
     def update_stored_schema(
         self,
         only_tables: Iterable[str] | None = None,
