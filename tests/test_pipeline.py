@@ -7,6 +7,7 @@ from typing import Any
 import dlt
 import pyarrow as pa
 import pytest
+from dlt.common.schema.exceptions import SchemaIdentifierNormalizationCollision
 from dlt.pipeline.exceptions import PipelineStepFailed
 
 from dlt_altertable import altertable
@@ -282,6 +283,16 @@ def test_direct_naming_passes_identifiers_through_verbatim(
     upload = server.uploads_for("UserEvents")[0]
     assert upload.params["table"] == "UserEvents"
     assert upload.schema.names[:2] == ["CamelCase", "with space"]
+
+
+def test_table_case_collision_fails_before_uploading(server: FakeServer, run_pipeline) -> None:
+    resources = [dlt.resource([{"id": 1}], name=name) for name in ("Events", "events")]
+
+    with pytest.raises(PipelineStepFailed) as failure:
+        run_pipeline(resources)
+
+    assert isinstance(failure.value.exception, SchemaIdentifierNormalizationCollision)
+    assert server.uploads == []
 
 
 @dlt.resource(name="typed_rows", write_disposition="append")
