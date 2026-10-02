@@ -120,6 +120,34 @@ def test_replace_appends_the_remaining_files_of_one_load(
     assert set(modes[1:]) == {"append"}
 
 
+@pytest.mark.parametrize("arrow", [False, True], ids=["objects", "arrow"])
+@pytest.mark.parametrize("file_max_bytes", [None, "0", "1000000"])
+def test_file_rotation_respects_destination_and_environment_settings(
+    server: FakeServer,
+    run_pipeline,
+    monkeypatch: pytest.MonkeyPatch,
+    arrow: bool,
+    file_max_bytes: str | None,
+) -> None:
+    monkeypatch.setenv("DATA_WRITER__BUFFER_MAX_ITEMS", "1")
+    if file_max_bytes is not None:
+        monkeypatch.setenv("DATA_WRITER__FILE_MAX_BYTES", file_max_bytes)
+
+    @dlt.resource(name="events", write_disposition="replace")
+    def events() -> Iterator[dict[str, Any] | pa.Table]:
+        for row in CONTACTS:
+            yield pa.Table.from_pylist([row]) if arrow else row
+
+    run_pipeline(events(), recommended_file_size=1)
+
+    uploads = server.uploads_for("events")
+    assert len(uploads) == (2 if file_max_bytes is None else 1)
+    assert uploads[0].params["mode"] == "overwrite"
+    assert all(upload.params["mode"] == "append" for upload in uploads[1:])
+    rows = without_lineage([row for upload in uploads for row in upload.rows])
+    assert sorted(rows, key=lambda row: row["id"]) == CONTACTS
+
+
 def test_replace_is_reissued_when_the_first_attempt_fails(server: FakeServer, run_pipeline) -> None:
     server.transient_upload_failures = 1
 

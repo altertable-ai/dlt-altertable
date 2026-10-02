@@ -10,6 +10,8 @@ from dlt.common.destination.exceptions import (
 )
 from dlt.common.exceptions import TerminalValueError
 from dlt.common.schema import TTableSchema
+from dlt.load.configuration import LoaderConfiguration
+from dlt.load.utils import get_available_worker_slots
 
 import dlt_altertable.destination
 from dlt_altertable import altertable
@@ -513,6 +515,26 @@ def test_missing_configuration_is_terminal_and_names_every_surface() -> None:
     assert "host is not configured" in str(failure.value)
     assert "destination.altertable.host" in str(failure.value)
     assert "ALTERTABLE_HOST" in str(failure.value)
+
+
+@pytest.mark.parametrize("max_jobs", [None, 4])
+def test_load_concurrency_defaults_to_one_and_can_be_overridden(max_jobs: int | None) -> None:
+    options = {} if max_jobs is None else {"max_parallel_load_jobs": max_jobs}
+    capabilities = altertable(**DESTINATION_OPTIONS, **options).capabilities()
+
+    assert get_available_worker_slots(LoaderConfiguration(workers=20), capabilities, []) == (
+        max_jobs or 1
+    )
+
+
+def test_file_size_default_can_be_overridden() -> None:
+    assert altertable(**DESTINATION_OPTIONS).capabilities().recommended_file_size == 128 * 1024**2
+    assert (
+        altertable(**DESTINATION_OPTIONS, recommended_file_size=1024)
+        .capabilities()
+        .recommended_file_size
+        == 1024
+    )
 
 
 def test_named_destination_configuration_keeps_precedence(

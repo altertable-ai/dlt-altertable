@@ -155,6 +155,8 @@ class altertable(CustomDestination):
         caps = super()._raw_capabilities()
         caps.sqlglot_dialect = "duckdb"
         caps.max_timestamp_precision = 9
+        caps.recommended_file_size = 128 * 1024**2
+        caps.max_parallel_load_jobs = 1
         caps.parquet_format = ParquetFormatConfiguration(version="2.6")
         caps.escape_identifier = escape_postgres_identifier
         caps.escape_literal = escape_duckdb_literal
