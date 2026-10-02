@@ -172,6 +172,7 @@ class altertable(CustomDestination):
         caps.parquet_format = ParquetFormatConfiguration(version="2.6")
         caps.escape_identifier = escape_postgres_identifier
         caps.escape_literal = escape_duckdb_literal
+        caps.has_case_sensitive_identifiers = False
         caps.supported_merge_strategies = ["upsert"]
         return caps
 
