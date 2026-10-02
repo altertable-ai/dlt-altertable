@@ -18,6 +18,7 @@ from dlt.common.schema.typing import TColumnSchema
 
 from dlt_altertable.api import execute_sql
 from dlt_altertable.configuration import AltertableClientConfiguration
+from dlt_altertable.layout import partition_expressions
 
 SQL_TYPES = {
     "text": "VARCHAR",
@@ -64,6 +65,20 @@ def qualified_table_name(config: AltertableClientConfiguration, table_name: str)
     return f"{qualified_schema_name(config)}.{escape_postgres_identifier(table_name)}"
 
 
+def apply_partitioning(
+    config: AltertableClientConfiguration, table: TTableSchema | PreparedTableSchema
+) -> None:
+    expressions = partition_expressions(table)
+    if expressions is None:
+        return
+    clause = (
+        f"SET PARTITIONED BY ({', '.join(expressions)})" if expressions else "RESET PARTITIONED BY"
+    )
+    execute_sql(
+        config, f"ALTER TABLE {qualified_table_name(config, cast(str, table['name']))} {clause}"
+    )
+
+
 def create_table(
     config: AltertableClientConfiguration,
     table: TTableSchema | PreparedTableSchema,
@@ -82,6 +97,7 @@ def create_table(
         config,
         f"CREATE TABLE IF NOT EXISTS {qualified_table_name(config, table_name)} ({columns})",
     )
+    apply_partitioning(config, table)
     logger.info(
         f"Created table {config.catalog}.{config.dataset_name}.{table_name} "
         f"with {len(table['columns'])} columns"
@@ -104,6 +120,7 @@ def create_or_evolve_table(
         for field in parquet_schema:
             if field.name in column_types and pa.types.is_uint64(field.type):
                 column_types[field.name] = "DECIMAL(20,0)"
+    partition_expressions(table)
     table_name = cast(str, table["name"])
     rows = execute_sql(
         config,
@@ -132,6 +149,7 @@ def create_or_evolve_table(
                 f"ALTER TABLE {qualified_table_name(config, table_name)} "
                 f"ALTER COLUMN {escape_postgres_identifier(name)} TYPE DECIMAL(20,0)",
             )
+    apply_partitioning(config, table)
     return True
 
 

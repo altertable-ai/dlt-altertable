@@ -85,6 +85,19 @@ Append and replace commit one file at a time. Replacement recreates the table on
 file, then appends the rest. Retried appends can duplicate rows. Do not set
 `LOAD__PARALLELISM_STRATEGY=parallel`: replacement requires sequential files per table.
 
+## Partitioning
+
+Partition hints require `append` or `merge`:
+
+```python
+from dlt_altertable import altertable_adapter, altertable_partition
+
+resource = altertable_adapter(contacts(), partition=altertable_partition.bucket(16, "id"))
+pipeline.run(resource)
+```
+
+Pass `partition=[]` to reset. Sort hints are not supported yet.
+
 ## Performance
 
 Override defaults with [dlt configuration](https://dlthub.com/docs/reference/performance):

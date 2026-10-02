@@ -10,7 +10,7 @@ import pytest
 from dlt.common.schema.exceptions import SchemaIdentifierNormalizationCollision
 from dlt.pipeline.exceptions import PipelineStepFailed
 
-from dlt_altertable import altertable
+from dlt_altertable import altertable, altertable_partition
 from tests.conftest import DESTINATION_OPTIONS, FakeServer, RecordedRequest
 
 CONTACTS = [
@@ -355,3 +355,134 @@ def test_destination_is_configurable_from_the_environment(
     assert upload.auth == ("env_user", "env_secret")
     assert upload.params["catalog"] == "env_catalog"
     assert upload.params["schema"] == "env_schema"
+
+
+def test_standard_layout_hints_survive_pipeline_normalization(server: FakeServer, run_pipeline):
+    resource = dlt.resource([{"category": "a", "score": 3}], name="events")
+    resource.apply_hints(columns={"category": {"partition": True}})
+    run_pipeline(resource)
+    assert server.alters == [
+        'ALTER TABLE "lakehouse"."raw"."events" SET PARTITIONED BY ("category")',
+    ]
+
+
+@pytest.mark.parametrize(
+    "hint", ["partition", "sort", "sort_reset", "column_sort", "column_sort_reset"]
+)
+def test_invalid_layout_prevents_other_tables_from_loading(server: FakeServer, run_pipeline, hint):
+    valid = dlt.resource([{"value": 1}], name="valid")
+    invalid = dlt.resource([{"value": "not a date"}], name="invalid")
+    if hint == "partition":
+        invalid.apply_hints(
+            additional_table_hints={
+                "x-altertable-partition": [{"column": "value", "transform": "year"}]
+            }
+        )
+        message = "year cannot partition"
+    else:
+        if hint.startswith("column"):
+            invalid.apply_hints(columns={"value": {"sort": hint == "column_sort"}})
+        else:
+            invalid.apply_hints(
+                additional_table_hints={"x-altertable-sort": ["value"] if hint == "sort" else []}
+            )
+        message = "Sort hints are unsupported"
+
+    with pytest.raises(PipelineStepFailed, match=message):
+        run_pipeline([valid, invalid])
+
+    assert server.uploads == []
+    assert not any(
+        statement.startswith(("CREATE", "ALTER", "INSERT")) for statement in server.statements
+    )
+
+
+@pytest.mark.parametrize("hint", ["column", "adapter", "reset"])
+def test_hinted_replace_fails_before_any_table_is_written(server, run_pipeline, hint):
+    from dlt_altertable import altertable_adapter
+
+    valid = dlt.resource([{"value": 1}], name="valid")
+    replacement = dlt.resource([{"value": 2}], name="replacement", write_disposition="replace")
+    if hint == "column":
+        replacement.apply_hints(columns={"value": {"partition": True}})
+    else:
+        altertable_adapter(replacement, partition=[] if hint == "reset" else "value")
+
+    with pytest.raises(PipelineStepFailed, match="layout hints require append or merge"):
+        run_pipeline([valid, replacement])
+
+    assert server.uploads == []
+    assert not any(
+        statement.startswith(("CREATE", "ALTER", "INSERT")) for statement in server.statements
+    )
+
+
+def test_adapter_layout_hints_survive_pipeline_normalization(server: FakeServer, run_pipeline):
+    from dlt_altertable import altertable_adapter
+
+    resource = dlt.resource(
+        [{"event time": datetime(2026, 1, 1, tzinfo=UTC), "category": "a", "score": 3}],
+        name="events",
+    )
+    run_pipeline(
+        altertable_adapter(
+            resource,
+            partition=["category", altertable_partition.year("event time")],
+        )
+    )
+    assert server.alters == [
+        'ALTER TABLE "lakehouse"."raw"."events" '
+        'SET PARTITIONED BY ("category", year("event time"))',
+    ]
+    assert server.uploads_for("events")[0].schema.names == [
+        "event time",
+        "category",
+        "score",
+        "_dlt_load_id",
+        "_dlt_id",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("naming_convention", "column_name"),
+    [("direct", 'event"time'), ("snake_case", "eventTime")],
+)
+def test_adapter_references_follow_pipeline_naming(
+    server: FakeServer, run_pipeline, monkeypatch, naming_convention, column_name
+):
+    from dlt_altertable import altertable_adapter
+
+    resource = altertable_adapter(
+        dlt.resource([{column_name: datetime(2026, 1, 1, tzinfo=UTC)}], name="events"),
+        partition=altertable_partition.year(column_name),
+    )
+
+    monkeypatch.setenv("SCHEMA__NAMING", naming_convention)
+    run_pipeline(resource)
+
+    assert server.alters == [
+        'ALTER TABLE "lakehouse"."raw"."events" SET PARTITIONED BY (year("event_time"))',
+    ]
+
+
+def test_adapter_preserves_dynamic_column_hints(server: FakeServer, run_pipeline, monkeypatch):
+    from dlt_altertable import altertable_adapter
+
+    column_hints = {"eventTime": {"data_type": "bigint", "nullable": False}}
+    resource = dlt.resource(
+        [{"eventTime": "1", "group": "a"}, {"eventTime": "2", "group": "b"}],
+        name="dynamic_events",
+        table_name=lambda row: f"events_{row['group']}",
+        columns=lambda row: column_hints,
+    )
+    altertable_adapter(resource, partition="eventTime")
+
+    monkeypatch.setenv("SCHEMA__NAMING", "snake_case")
+    run_pipeline(resource)
+
+    for table_name, value in (("events_a", 1), ("events_b", 2)):
+        upload = server.uploads_for(table_name)[0]
+        assert upload.schema.field("event_time").type == pa.int64()
+        assert upload.schema.field("event_time").nullable is False
+        assert upload.rows[0]["event_time"] == value
+    assert "x-altertable-source-name" not in column_hints["eventTime"]
