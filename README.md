@@ -27,8 +27,8 @@ password = "..."
 ```
 
 Use the HTTP API host. Defaults: HTTPS, port 443, compute size `XS`.
-Set `dataset_name` on the destination; dlt's pipeline setting is ignored.
-The catalog must exist; schemas are created automatically.
+Set `dataset_name` on the destination. dlt's pipeline setting is ignored.
+The catalog must exist. Schemas are created automatically.
 
 Settings also accept dlt environment variables (`DESTINATION__ALTERTABLE__HOST`, etc.),
 existing `ALTERTABLE_*` credentials, or arguments to `altertable(...)`.
@@ -63,7 +63,7 @@ pipeline.run(contacts())
 | --- | --- |
 | `append` | Adds rows. |
 | `replace` | Recreates the table, then appends subsequent files. |
-| `merge` | Upserts by `primary_key`; omitted columns keep their values. |
+| `merge` | Upserts by `primary_key`. Omitted columns keep their values. |
 
 Merge requires a non-nullable primary key. In the example, `dedup_sort` keeps the highest
 `lastmodifieddate` per `id`, comparing incoming and stored rows. `delete-insert`, `insert-only`, `scd2`,
@@ -71,28 +71,20 @@ Merge requires a non-nullable primary key. In the example, `dedup_sort` keeps th
 
 New columns are added automatically. Nested objects and lists are stored as JSON strings.
 
-Each file is atomic; a whole load is not. Replacement recreates the table on its first file, then
+Each file is atomic. A whole load is not. Replacement recreates the table on its first file, then
 appends the rest. Retried appends can duplicate rows. Do not set
 `LOAD__PARALLELISM_STRATEGY=parallel`: replacement requires sequential files per table.
-
-Uploads default to one concurrent load job, including across tables, to reduce DuckLake catalog
-commit conflicts. Parquet files rotate at approximately 128 MiB to bound individual upload retries.
-Rotation happens after a buffer or Arrow batch is written; it is not a hard upload or memory limit.
 
 ## Performance
 
 Override defaults with [dlt configuration](https://dlthub.com/docs/reference/performance):
 
 ```bash
-export DATA_WRITER__FILE_MAX_BYTES=268435456  # 256 MiB; 0 disables byte-based rotation
+export DATA_WRITER__FILE_MAX_BYTES=268435456  # 256 MiB (0 disables byte-based rotation)
 export DATA_WRITER__COMPRESSION=zstd
-export PROGRESS=log
-export PYTHONUNBUFFERED=1
 ```
 
 `altertable(max_parallel_load_jobs=2)` allows parallel uploads, subject to `LOAD__WORKERS`.
-Measure catalog contention before increasing either; backend tasks enforce one load worker.
-File rotation does not checkpoint incremental state.
 
 ## Read and verify
 
@@ -104,7 +96,7 @@ print(verify_catalog())
 print(verify_load(pipeline))
 ```
 
-Verification helpers return a list of problems; `[]` means none found.
+Verification helpers return a list of problems. `[]` means none found.
 For Arrow inputs with `append` or `merge`, set
 `NORMALIZE__PARQUET_NORMALIZER__ADD_DLT_LOAD_ID=true` before loading to use `verify_load`.
 
