@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 from dlt.common import logger
 from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
 from dlt.common.destination.capabilities import DestinationCapabilitiesContext
+from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.common.exceptions import TerminalValueError
 from dlt.common.libs.pyarrow import normalize_py_arrow_item
 from dlt.common.normalizers.naming.direct import NamingConvention
@@ -130,6 +131,104 @@ def create_or_evolve_table(
                 f"ALTER COLUMN {escape_postgres_identifier(name)} TYPE DECIMAL(20,0)",
             )
     return True
+
+
+INTEGER_BITS = {
+    "TINYINT": 8,
+    "UTINYINT": 8,
+    "SMALLINT": 16,
+    "USMALLINT": 16,
+    "INTEGER": 32,
+    "UINTEGER": 32,
+    "BIGINT": 64,
+    "UBIGINT": 64,
+    "HUGEINT": 128,
+    "UHUGEINT": 128,
+}
+
+
+def stored_type_holds(stored_type: str, incoming_type: str) -> bool:
+    if stored_type in INTEGER_BITS and incoming_type in INTEGER_BITS:
+        stored_unsigned = stored_type.startswith("U")
+        incoming_unsigned = incoming_type.startswith("U")
+        return (not stored_unsigned or incoming_unsigned) and (
+            INTEGER_BITS[stored_type] - (not stored_unsigned)
+            >= INTEGER_BITS[incoming_type] - (not incoming_unsigned)
+        )
+    if stored_type.startswith("DECIMAL("):
+        stored_precision, stored_scale = map(int, stored_type[8:-1].split(","))
+        if incoming_type in INTEGER_BITS:
+            value_bits = INTEGER_BITS[incoming_type] - (not incoming_type.startswith("U"))
+            return stored_precision - stored_scale >= len(str(2**value_bits))
+        if incoming_type.startswith("DECIMAL("):
+            incoming_precision, incoming_scale = map(int, incoming_type[8:-1].split(","))
+            return stored_scale >= incoming_scale and (
+                stored_precision - stored_scale >= incoming_precision - incoming_scale
+            )
+    return stored_type == incoming_type or (stored_type, incoming_type) == ("DOUBLE", "FLOAT")
+
+
+def stored_columns(config: AltertableClientConfiguration, table_name: str) -> dict[str, str]:
+    return dict(
+        execute_sql(
+            config,
+            "SELECT column_name, data_type FROM information_schema.columns "
+            f"WHERE table_catalog = {escape_duckdb_literal(config.catalog)} "
+            f"AND table_schema = {escape_duckdb_literal(config.dataset_name)} "
+            f"AND table_name = {escape_duckdb_literal(table_name)} ORDER BY ordinal_position",
+        )
+    )
+
+
+def replace_rows(
+    config: AltertableClientConfiguration, table: TTableSchema, staging_table_name: str
+) -> bool:
+    target = qualified_table_name(config, cast(str, table["name"]))
+    staging = qualified_table_name(config, staging_table_name)
+    existing = stored_columns(config, cast(str, table["name"]))
+    incoming = stored_columns(config, staging_table_name)
+    for name, stored_type in existing.items():
+        if name not in incoming:
+            raise DestinationTerminalException(
+                f"Table {table['name']}: replacement schema omits stored column {name!r}."
+            )
+        if not (
+            stored_type_holds(stored_type, incoming[name])
+            or stored_type_holds(incoming[name], stored_type)
+        ):
+            raise DestinationTerminalException(
+                f"Table {table['name']}: replacement column {name!r} has type "
+                f"{incoming[name]}, but the stored column has type {stored_type}."
+            )
+    if list(incoming)[: len(existing)] != list(existing):
+        raise DestinationTerminalException(
+            f"Table {table['name']}: replacement column order must start with the stored "
+            f"columns {list(existing)!r}; new columns must follow them."
+        )
+    if not existing:
+        execute_sql(config, f"CREATE TABLE {target} AS SELECT * FROM {staging} LIMIT 0")
+    else:
+        for name, data_type in incoming.items():
+            column = escape_postgres_identifier(name)
+            if name not in existing:
+                execute_sql(config, f"ALTER TABLE {target} ADD COLUMN {column} {data_type}")
+            elif not stored_type_holds(existing[name], data_type):
+                execute_sql(config, f"ALTER TABLE {target} ALTER COLUMN {column} TYPE {data_type}")
+    staged_rows = f"SELECT *, NULL::BIGINT AS _dlt_never_matching_hash_key FROM {staging}"
+    columns = [escape_postgres_identifier(name) for name in table["columns"]]
+    execute_sql(
+        config,
+        f"MERGE INTO {target} AS stored USING ({staged_rows}) "
+        "AS staged ON stored.rowid = staged._dlt_never_matching_hash_key "
+        "WHEN NOT MATCHED BY SOURCE THEN DELETE "
+        f"WHEN NOT MATCHED THEN INSERT ({', '.join(columns)}) "
+        f"VALUES ({', '.join(f'staged.{column}' for column in columns)})",
+    )
+    return bool(existing)
+
+
+def drop_table(config: AltertableClientConfiguration, table_name: str) -> None:
+    execute_sql(config, f"DROP TABLE IF EXISTS {qualified_table_name(config, table_name)}")
 
 
 @contextmanager

@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import dlt
 import pytest
@@ -114,6 +115,7 @@ def test_replace_only_replaces_the_first_file_of_a_load(
         "append",
     ]
     assert replaced_tables == ["deals"]
+    assert server.swapped_tables == ["deals"]
 
 
 @pytest.mark.usefixtures("replaced_tables")
@@ -124,6 +126,7 @@ def test_replace_bookkeeping_is_per_table(
     sink(write_parquet(rows, "b"), table_schema("deals", "replace"), config=make_config())
 
     assert [upload.params["mode"] for upload in server.uploads] == ["overwrite", "overwrite"]
+    assert server.swapped_tables == ["contacts", "deals"]
 
 
 @pytest.mark.usefixtures("replaced_tables")
@@ -233,7 +236,7 @@ def test_compute_size_reaches_every_query(
 def test_schema_evolution_adds_new_columns_before_the_upload(
     server: FakeServer, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
-    server.existing_columns = ["id"]
+    server.existing_columns = {"id": "BIGINT"}
 
     sink(write_parquet(rows), table_schema("contacts", "append"), config=make_config())
 
@@ -284,7 +287,7 @@ def test_a_missing_table_is_created_before_the_load(
 def test_an_existing_table_is_not_recreated(
     server: FakeServer, write_parquet, rows: list[dict[str, Any]], build_table
 ) -> None:
-    server.existing_columns = ["id", "lastmodifieddate"]
+    server.existing_columns = {"id": "BIGINT", "lastmodifieddate": "BIGINT"}
 
     sink(write_parquet(rows), build_table(), config=make_config())
 
@@ -293,12 +296,69 @@ def test_an_existing_table_is_not_recreated(
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_replace_skips_the_column_lookup(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+def test_replace_swaps_staged_rows_in_one_statement(
+    server: FakeServer, write_parquet, rows: list[dict[str, Any]], monkeypatch
 ) -> None:
+    monkeypatch.setattr(dlt_altertable.destination, "uuid4", lambda: UUID(int=1))
     sink(write_parquet(rows), table_schema("contacts", "replace"), config=make_config())
 
-    assert server.statements == []
+    assert len(server.schema_lookups) == 2
+    assert server.uploads[0].params["mode"] == "overwrite"
+    assert server.statements[-2:] == [
+        'MERGE INTO "lakehouse"."raw"."contacts" AS stored '
+        "USING (SELECT *, NULL::BIGINT AS _dlt_never_matching_hash_key "
+        'FROM "lakehouse"."raw"."contacts__dlt_replace_00000000000000000000000000000001") '
+        "AS staged ON stored.rowid = staged._dlt_never_matching_hash_key "
+        "WHEN NOT MATCHED BY SOURCE THEN DELETE "
+        'WHEN NOT MATCHED THEN INSERT ("id", "lastmodifieddate") '
+        'VALUES (staged."id", staged."lastmodifieddate")',
+        "DROP TABLE IF EXISTS "
+        '"lakehouse"."raw"."contacts__dlt_replace_00000000000000000000000000000001"',
+    ]
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_failed_replacement_upload_keeps_the_stored_rows(
+    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+) -> None:
+    server.terminal_upload_failure = True
+
+    with pytest.raises(DestinationTerminalException):
+        sink(write_parquet(rows), table_schema("contacts", "replace"), config=make_config())
+
+    assert server.swapped_tables == []
+    assert not [statement for statement in server.statements if statement.startswith("DELETE")]
+
+
+@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.parametrize("stored_columns", [["lastmodifieddate", "id"], ["lastmodifieddate"]])
+def test_replace_rejects_incompatible_column_order_before_swap(
+    server: FakeServer, write_parquet, rows, stored_columns
+) -> None:
+    server.existing_columns = dict.fromkeys(stored_columns, "BIGINT")
+    table = table_schema("contacts", "replace")
+
+    with pytest.raises(DestinationTerminalException, match="column order"):
+        sink(write_parquet(rows), table, config=make_config())
+
+    assert server.swapped_tables == []
+    assert server.alters == []
+    assert list(table["columns"]) == ["id", "lastmodifieddate"]
+
+
+@pytest.mark.usefixtures("replaced_tables")
+def test_replace_adds_trailing_columns_before_swapping_rows(
+    server: FakeServer, write_parquet, rows
+):
+    server.existing_columns = {"id": "BIGINT"}
+
+    sink(write_parquet(rows), table_schema("contacts", "replace"), config=make_config())
+
+    assert server.statements[-3] == (
+        'ALTER TABLE "lakehouse"."raw"."contacts" ADD COLUMN "lastmodifieddate" BIGINT'
+    )
+    assert server.swapped_tables == ["contacts"]
+    assert server.uploads[0].rows == rows
 
 
 def test_schema_lookup_runs_once_per_existing_table_per_load(
@@ -308,7 +368,7 @@ def test_schema_lookup_runs_once_per_existing_table_per_load(
     evolved_tables: list[str],
     replaced_tables: list[str],
 ) -> None:
-    server.existing_columns = ["id", "lastmodifieddate"]
+    server.existing_columns = {"id": "BIGINT", "lastmodifieddate": "BIGINT"}
 
     sink(write_parquet(rows, "a"), table_schema("contacts", "append"), config=make_config())
     sink(write_parquet(rows, "b"), table_schema("contacts", "append"), config=make_config())
@@ -329,7 +389,7 @@ def test_a_created_table_is_not_cached_as_evolved(
     assert any(statement.startswith("CREATE TABLE") for statement in server.statements)
     assert evolved_tables == []
 
-    server.existing_columns = ["id"]
+    server.existing_columns = {"id": "BIGINT"}
     wide_file = write_parquet([{"id": 2, "lastmodifieddate": 20}], "wide")
     sink(wide_file, table_schema("contacts", "append"), config=make_config())
 
@@ -418,7 +478,7 @@ def test_wrong_credentials_fail_terminally(
         (table_schema("contacts", "replace"), "overwrite"),
         (with_primary_key(table_schema("contacts", "merge"), "id"), "upsert"),
     ],
-    ids=["append", "overwrite", "upsert"],
+    ids=["append", "replace", "upsert"],
 )
 def test_server_failure_names_the_ingest_operation_and_target(
     server: FakeServer,

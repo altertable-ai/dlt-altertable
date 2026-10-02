@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING, Any, Literal, cast
+from uuid import uuid4
 
 import dlt
 import pyarrow as pa
@@ -18,13 +19,18 @@ from dlt.destinations.impl.destination.factory import destination as CustomDesti
 
 from dlt_altertable.api import post_parquet
 from dlt_altertable.configuration import AltertableClientConfiguration
-from dlt_altertable.table_schema import aligned_parquet, create_or_evolve_table
+from dlt_altertable.table_schema import (
+    aligned_parquet,
+    create_or_evolve_table,
+    drop_table,
+    replace_rows,
+)
 
 if TYPE_CHECKING:
     from dlt_altertable.job_client import AltertableJobClient
 
 
-type IngestMode = Literal["append", "overwrite", "upsert"]
+type IngestMode = Literal["append", "upsert"]
 
 DEFAULT_UPLOAD_FILE_SIZE_BYTES = 128 * 1024**2
 NANOSECOND_TIMESTAMP_PRECISION = 9
@@ -80,12 +86,6 @@ def upsert_params(table: TTableSchema) -> dict[str, str] | None:
     return params
 
 
-def upload_mode(table: TTableSchema, table_already_replaced: bool) -> IngestMode:
-    if table.get("write_disposition") == "replace" and not table_already_replaced:
-        return "overwrite"
-    return "append"
-
-
 def replaced_tables() -> list[str]:
     return dlt.current.destination_state().setdefault("replaced_tables", [])
 
@@ -104,11 +104,10 @@ def _upload(
 
     already_replaced = replaced_tables()
     already_evolved = evolved_tables()
-    ingest_mode: IngestMode = (
-        "upsert" if upsert is not None else upload_mode(table, table_name in already_replaced)
-    )
+    replacing = table.get("write_disposition") == "replace" and table_name not in already_replaced
+    ingest_mode: IngestMode = "upsert" if upsert is not None else "append"
 
-    if ingest_mode != "overwrite":
+    if not replacing:
         parquet_schema = pq.read_schema(parquet_file_path)
         if table_name not in already_evolved or any(
             pa.types.is_uint64(field.type) for field in parquet_schema
@@ -122,6 +121,20 @@ def _upload(
         "schema": cast(str, config.dataset_name),
         "table": table_name,
     }
+    if replacing:
+        staging_table_name = f"{table_name}__dlt_replace_{uuid4().hex}"
+        staging_params = params | {"table": staging_table_name, "mode": "overwrite"}
+        action = f"overwrite {config.catalog}.{config.dataset_name}.{table_name}"
+        try:
+            with aligned_parquet(parquet_file_path, table) as upload_path:
+                post_parquet(config, "upload", staging_params, upload_path, action)
+            if replace_rows(config, table, staging_table_name):
+                already_evolved.append(table_name)
+        finally:
+            drop_table(config, staging_table_name)
+        already_replaced.append(table_name)
+        return
+
     action = f"{ingest_mode} {config.catalog}.{config.dataset_name}.{table_name}"
     if upsert is not None:
         post_parquet(config, "upsert", params | upsert, parquet_file_path, action)
@@ -129,9 +142,6 @@ def _upload(
         params["mode"] = ingest_mode
         with aligned_parquet(parquet_file_path, table) as upload_path:
             post_parquet(config, "upload", params, upload_path, action)
-
-    if ingest_mode == "overwrite":
-        already_replaced.append(table_name)
 
 
 class altertable(CustomDestination):

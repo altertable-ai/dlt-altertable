@@ -67,7 +67,7 @@ class FakeServer:
     attempted_tables: list[str] = field(default_factory=list)
     statements: list[str] = field(default_factory=list)
     query_payloads: list[dict[str, Any]] = field(default_factory=list)
-    existing_columns: list[str] = field(default_factory=list)
+    existing_columns: dict[str, str] = field(default_factory=dict)
     catalogs: dict[str, bool] = field(default_factory=lambda: {"lakehouse": False})
     counts: dict[str, list[int]] = field(default_factory=dict)
     counts_asked: dict[str, str] = field(default_factory=dict)
@@ -112,6 +112,14 @@ class FakeServer:
         return [statement for statement in self.statements if statement.startswith("ALTER")]
 
     @property
+    def swapped_tables(self) -> list[str]:
+        return [
+            QUALIFIED_TABLE.findall(statement)[0]
+            for statement in self.statements
+            if statement.startswith("MERGE INTO")
+        ]
+
+    @property
     def creates(self) -> list[str]:
         return [statement for statement in self.statements if statement.startswith("CREATE")]
 
@@ -134,7 +142,12 @@ class FakeServer:
             self.query_payloads.append(dict(json))
             if self.query_error is not None:
                 return query_response([{"error": self.query_error}])
-            if statement.startswith(("ALTER", "CREATE")):
+            if statement.startswith("MERGE INTO"):
+                target_table, staging_table = QUALIFIED_TABLE.findall(statement)[:2]
+                for upload in self.uploads_for(staging_table):
+                    upload.params["table"] = target_table
+                return query_response([])
+            if statement.startswith(("ALTER", "CREATE", "DROP")):
                 return query_response([])
             if "information_schema.tables" in statement:
                 landed = {upload.params["table"] for upload in self.uploads}
@@ -150,9 +163,22 @@ class FakeServer:
                 )
             if statement.startswith("SELECT count"):
                 return self.count_query_response(statement)
-            if statement.startswith("SELECT column_name, data_type"):
-                return query_response([[column, "BIGINT"] for column in self.existing_columns])
-            return query_response([[column] for column in self.existing_columns])
+            columns = [[column] for column in self.existing_columns]
+            if "SELECT column_name, data_type FROM information_schema.columns" in statement:
+                for upload in self.uploads:
+                    table_name = upload.params["table"]
+                    if "__dlt_replace_" in table_name and f"'{table_name}'" in statement:
+                        import duckdb
+
+                        with duckdb.connect() as connection:
+                            types = connection.from_arrow(
+                                pq.read_table(io.BytesIO(upload.body))
+                            ).types
+                        return query_response(
+                            list(zip(upload.schema.names, map(str, types), strict=True))
+                        )
+                columns = [list(column) for column in self.existing_columns.items()]
+            return query_response(columns)
 
         table_name = params["table"]
         if not table_name.startswith("_dlt"):
@@ -226,9 +252,35 @@ def worker_ingest_into(connection):
         assert endpoint == "upload"
         target = f'lakehouse.raw."{params["table"]}"'
         if params["mode"] == "overwrite":
+            connection.execute("CREATE SCHEMA IF NOT EXISTS lakehouse.raw")
             connection.execute(f"DROP TABLE IF EXISTS {target}")
             connection.execute(f"CREATE TABLE {target} AS SELECT * FROM read_parquet(?)", [path])
         else:
             connection.execute(f"INSERT INTO {target} SELECT * FROM read_parquet(?)", [path])
 
     return upload
+
+
+@pytest.fixture
+def native_upload(connection, monkeypatch):
+    from dlt_altertable.destination import _upload
+
+    monkeypatch.setattr(
+        "dlt_altertable.table_schema.execute_sql",
+        lambda config, statement: connection.execute(statement).fetchall(),
+    )
+    monkeypatch.setattr("dlt_altertable.destination.post_parquet", worker_ingest_into(connection))
+    monkeypatch.setattr("dlt_altertable.destination.replaced_tables", list)
+    monkeypatch.setattr("dlt_altertable.destination.evolved_tables", list)
+    return _upload
+
+
+def events_table():
+    return {
+        "name": "events",
+        "columns": {
+            "event time": {"name": "event time", "data_type": "timestamp"},
+            "category": {"name": "category", "data_type": "text"},
+            "score": {"name": "score", "data_type": "bigint"},
+        },
+    }

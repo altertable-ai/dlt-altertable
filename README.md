@@ -62,7 +62,7 @@ pipeline.run(contacts())
 | Disposition | Behavior |
 | --- | --- |
 | `append` | Adds rows. |
-| `replace` | Recreates the table, then appends subsequent files. |
+| `replace` | Replaces rows while preserving the table and its layout. |
 | `merge` | Upserts by `primary_key`. Omitted columns keep their values. |
 
 Merge requires a non-nullable primary key. In the example, `dedup_sort` keeps the highest
@@ -70,8 +70,9 @@ Merge requires a non-nullable primary key. In the example, `dedup_sort` keeps th
 `merge_key`, `hard_delete`, and ascending `dedup_sort` are unsupported.
 
 New columns are added automatically. Nested objects and lists are stored as JSON strings.
+Replacement widens compatible column types and rejects incompatible schemas before swapping rows.
 
-Each file is atomic. A whole load is not. Replacement recreates the table on its first file, then
+Each file is atomic. A whole load is not. Replacement stages and swaps its first file, then
 appends the rest. Retried appends can duplicate rows. Do not set
 `LOAD__PARALLELISM_STRATEGY=parallel`: replacement requires sequential files per table.
 

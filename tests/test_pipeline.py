@@ -97,10 +97,11 @@ def test_each_file_becomes_one_post(server: FakeServer, run_pipeline) -> None:
     assert uploads[0].params["mode"] == "append"
 
 
-def test_replace_recreates_the_table_on_every_load(server: FakeServer, run_pipeline) -> None:
+def test_replace_swaps_the_rows_on_every_load(server: FakeServer, run_pipeline) -> None:
     run_pipeline(replaced_deals())
     run_pipeline(replaced_deals())
 
+    assert server.swapped_tables == ["deals", "deals"]
     assert [upload.params["mode"] for upload in server.uploads_for("deals")] == [
         "overwrite",
         "overwrite",
@@ -114,6 +115,7 @@ def test_replace_appends_the_remaining_files_of_one_load(
 
     run_pipeline(replaced_deals())
 
+    assert server.swapped_tables == ["deals"]
     modes = [upload.params["mode"] for upload in server.uploads_for("deals")]
     assert len(modes) > 1, "expected the load to be split across several parquet files"
     assert modes[0] == "overwrite"
@@ -153,7 +155,8 @@ def test_replace_is_reissued_when_the_first_attempt_fails(server: FakeServer, ru
 
     run_pipeline(replaced_deals())
 
-    assert server.attempts_for("deals") == 2, "expected dlt to retry the failed load job"
+    assert sum(name.startswith("deals__dlt_replace_") for name in server.attempted_tables) == 2
+    assert server.swapped_tables == ["deals"], "a failed upload must not touch the stored rows"
     assert [upload.params["mode"] for upload in server.uploads_for("deals")] == ["overwrite"]
 
 
@@ -199,6 +202,7 @@ def test_replace_resumes_as_append_after_a_failed_file(
         "append",
         "append",
     ], "a resumed load must not replace the table a second time"
+    assert server.swapped_tables == ["deals"]
 
 
 @dlt.resource(name="by_merge_key", write_disposition="merge", merge_key="id")
