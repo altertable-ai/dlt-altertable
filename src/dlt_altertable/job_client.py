@@ -1,12 +1,13 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
-from functools import cached_property
-from typing import Any, cast
+from functools import cached_property, partial
+from typing import cast, override
 from warnings import warn
 
 from dlt.common import json
 from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
 from dlt.common.destination.client import (
+    LoadJob,
     PreparedTableSchema,
     StateInfo,
     StorageSchemaInfo,
@@ -17,13 +18,24 @@ from dlt.common.destination.exceptions import (
     DestinationUndefinedEntity,
 )
 from dlt.common.schema import TSchemaTables, TTableSchema
+from dlt.common.schema.utils import get_nested_tables, get_root_table, has_column_with_prop
+from dlt.common.storages.load_package import destination_state
 from dlt.common.storages.load_storage import ParsedLoadJobFileName
 from dlt.destinations.impl.destination.destination import DestinationClient
+from dlt.destinations.job_impl import DestinationParquetLoadJob
 from dlt.destinations.sql_client import WithSqlClient
+from dlt.destinations.utils import verify_schema_merge_disposition
 
 from dlt_altertable.api import execute_sql
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.destination import upsert_params
+from dlt_altertable.merge import (
+    MergeThenDeleteJob,
+    completed_staged_files,
+    merge_statements,
+    stage_file,
+    staging_config,
+)
 from dlt_altertable.sql_client import AltertableSqlClient
 from dlt_altertable.table_schema import (
     create_or_evolve_table,
@@ -36,6 +48,7 @@ from dlt_altertable.table_schema import (
 class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
     config: AltertableClientConfiguration
 
+    @override
     def verify_schema(
         self,
         only_tables: Iterable[str] | None = None,
@@ -43,10 +56,45 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
     ) -> list[PreparedTableSchema]:
         tables = super().verify_schema(only_tables or (), new_jobs or ())
         for table in tables:
-            upsert_params(cast(TTableSchema, table))
+            table_name = cast(str, table["name"])
+            if self._requires_staging(table_name):
+                root = get_root_table(self.schema.tables, table_name)
+                chain = self._table_chain(cast(str, root["name"]))
+                upsert_params(cast(TTableSchema, chain[0]), allow_hard_delete=True)
+                MergeThenDeleteJob.generate_sql(chain, self.sql_client)
+            else:
+                upsert_params(cast(TTableSchema, table))
             for column in table["columns"].values():
                 sql_type(column)
+        if exceptions := verify_schema_merge_disposition(self.schema, tables, self.capabilities):
+            raise exceptions[0]
         return tables
+
+    def _requires_staging(self, table_name: str) -> bool:
+        root = get_root_table(self.schema.tables, table_name)
+        return root.get("write_disposition") == "merge" and (
+            has_column_with_prop(root, "hard_delete")
+            or len(get_nested_tables(self.schema.tables, cast(str, root["name"]))) > 1
+        )
+
+    def _table_chain(self, root_name: str) -> list[PreparedTableSchema]:
+        return [
+            self.prepare_load_table(cast(str, table["name"]))
+            for table in get_nested_tables(self.schema.tables, root_name)
+        ]
+
+    @override
+    def create_load_job(
+        self, table: PreparedTableSchema, file_path: str, load_id: str, restore: bool = False
+    ) -> LoadJob:
+        if self._requires_staging(cast(str, table["name"])):
+            return DestinationParquetLoadJob(
+                file_path,
+                self.config,
+                destination_state(),
+                partial(stage_file, self.config),
+            )
+        return super().create_load_job(table, file_path, load_id, restore)
 
     @property
     def sql_client_class(self) -> type[AltertableSqlClient]:
@@ -121,17 +169,20 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
             )
         return update
 
-    def _insert(self, table_name: str, values: dict[str, Any]) -> None:
+    def _insert(self, table_name: str, values: Mapping[str, object]) -> None:
+        execute_sql(self.config, self._insert_statement(table_name, values))
+
+    def _insert_statement(self, table_name: str, values: Mapping[str, object]) -> str:
         columns = ", ".join(escape_postgres_identifier(column) for column in values)
         literals = ", ".join(escape_duckdb_literal(value) for value in values.values())
-        execute_sql(
-            self.config,
+        return (
             f"INSERT INTO {qualified_table_name(self.config, table_name)} "
-            f"({columns}) VALUES ({literals})",
+            f"({columns}) VALUES ({literals})"
         )
 
+    @override
     def complete_load(self, load_id: str) -> None:
-        self._insert(
+        load_receipt_sql = self._insert_statement(
             self.schema.loads_table_name,
             {
                 "load_id": load_id,
@@ -141,6 +192,30 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                 "schema_version_hash": self.schema.stored_version_hash,
             },
         )
+        files = completed_staged_files()
+        if not files:
+            execute_sql(self.config, load_receipt_sql)
+            return
+        staged = staging_config(self.config, load_id)
+        load_committed = bool(
+            execute_sql(
+                self.config,
+                f"SELECT 1 FROM {qualified_table_name(self.config, self.schema.loads_table_name)} "
+                f"WHERE load_id = {escape_duckdb_literal(load_id)} AND status = 0",
+            )
+        )
+        if not load_committed:
+            self.sql_client.staging_dataset_name = cast(str, staged.dataset_name)
+            statements = ["BEGIN TRANSACTION;"]
+            roots = {cast(str, get_root_table(self.schema.tables, name)["name"]) for name in files}
+            for root in sorted(roots):
+                chain = self._table_chain(root)
+                for table in chain:
+                    create_or_evolve_table(self.config, table)
+                statements.extend(merge_statements(chain, self.sql_client, files))
+            statements.extend([f"{load_receipt_sql};", "COMMIT;"])
+            execute_sql(self.config, "\n".join(statements))
+        execute_sql(self.config, f"DROP SCHEMA IF EXISTS {qualified_schema_name(staged)} CASCADE")
 
     def _stored_schema(self, where: str) -> StorageSchemaInfo | None:
         if not self._table_exists(self.schema.version_table_name):

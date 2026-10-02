@@ -34,13 +34,15 @@ def primary_key_columns(table: TTableSchema) -> list[str]:
     return get_columns_names_with_prop(table, "primary_key")
 
 
-def unsupported_merge_configuration(table: TTableSchema) -> str | None:
+def unsupported_merge_configuration(
+    table: TTableSchema, *, allow_hard_delete: bool = False
+) -> str | None:
     strategy = table.get("x-merge-strategy")
     if strategy not in (None, "upsert"):
         return f"merge strategy {strategy!r}"
     if has_column_with_prop(table, "merge_key"):
         return "merge_key"
-    if has_column_with_prop(table, "hard_delete"):
+    if not allow_hard_delete and has_column_with_prop(table, "hard_delete"):
         return "the hard_delete column hint"
     dedup_sort = get_dedup_sort_tuple(table)
     if dedup_sort and dedup_sort[1] != "desc":
@@ -50,10 +52,10 @@ def unsupported_merge_configuration(table: TTableSchema) -> str | None:
     return None
 
 
-def upsert_params(table: TTableSchema) -> dict[str, str] | None:
+def upsert_params(table: TTableSchema, *, allow_hard_delete: bool = False) -> dict[str, str] | None:
     if table.get("write_disposition") != "merge":
         return None
-    if unsupported := unsupported_merge_configuration(table):
+    if unsupported := unsupported_merge_configuration(table, allow_hard_delete=allow_hard_delete):
         raise DestinationTerminalException(
             f"Table {table['name']}: {unsupported} is not supported by the Altertable "
             "destination, which runs merge as a server-side upsert on the primary_key."

@@ -188,7 +188,7 @@ def test_unsupported_merge_configurations_are_terminal(
 
 
 @pytest.mark.usefixtures("replaced_tables")
-def test_merge_with_hard_delete_hint_is_terminal(
+def test_direct_upsert_rejects_hard_delete_without_staging(
     server: FakeServer, write_parquet, rows: list[dict[str, Any]]
 ) -> None:
     table = with_primary_key(table_schema("contacts", "merge"), "id")

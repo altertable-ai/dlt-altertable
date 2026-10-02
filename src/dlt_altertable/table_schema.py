@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 from dlt.common import logger
 from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
 from dlt.common.destination.capabilities import DestinationCapabilitiesContext
+from dlt.common.destination.client import PreparedTableSchema
 from dlt.common.exceptions import TerminalValueError
 from dlt.common.libs.pyarrow import normalize_py_arrow_item
 from dlt.common.normalizers.naming.direct import NamingConvention
@@ -64,7 +65,9 @@ def qualified_table_name(config: AltertableClientConfiguration, table_name: str)
 
 
 def create_table(
-    config: AltertableClientConfiguration, table: TTableSchema, column_types: dict[str, str]
+    config: AltertableClientConfiguration,
+    table: TTableSchema | PreparedTableSchema,
+    column_types: dict[str, str],
 ) -> None:
     table_name = cast(str, table["name"])
     columns = ", ".join(
@@ -87,7 +90,7 @@ def create_table(
 
 def create_or_evolve_table(
     config: AltertableClientConfiguration,
-    table: TTableSchema,
+    table: TTableSchema | PreparedTableSchema,
     parquet_schema: pa.Schema | None = None,
 ) -> bool:
     """Creating the table from dlt's typed schema keeps column types and later evolution
@@ -134,10 +137,7 @@ def create_or_evolve_table(
 
 @contextmanager
 def aligned_parquet(parquet_file_path: str, table: TTableSchema) -> Iterator[str]:
-    """dlt can evolve a load's schema between files, leaving an earlier file narrower than the
-    table the load builds, while an append or replace upload must match the table column for
-    column. A file that falls short is padded with typed NULL columns into a temporary copy.
-    Merge files never come through here, so columns a merge file omits keep their stored values."""
+    """Pad Parquet files with typed NULL columns to match the current table schema."""
     if pq.read_schema(parquet_file_path).names == list(table["columns"]):
         yield parquet_file_path
         return
