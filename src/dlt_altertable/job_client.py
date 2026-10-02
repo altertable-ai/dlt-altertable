@@ -12,7 +12,10 @@ from dlt.common.destination.client import (
     StorageSchemaInfo,
     WithStateSync,
 )
-from dlt.common.destination.exceptions import DestinationUndefinedEntity
+from dlt.common.destination.exceptions import (
+    DestinationTerminalException,
+    DestinationUndefinedEntity,
+)
 from dlt.common.schema import TSchemaTables, TTableSchema
 from dlt.common.storages.load_storage import ParsedLoadJobFileName
 from dlt.destinations.impl.destination.destination import DestinationClient
@@ -80,6 +83,22 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
             )
             return
         execute_sql(self.config, statement)
+
+    def drop_tables(self, *tables: str, delete_schema: bool = True) -> None:
+        if self.config.allow_destructive_refresh is not True:
+            raise DestinationTerminalException(
+                "Dropping resource tables requires altertable(allow_destructive_refresh=True)."
+            )
+        for table_name in tables:
+            execute_sql(
+                self.config, f"DROP TABLE IF EXISTS {qualified_table_name(self.config, table_name)}"
+            )
+        if delete_schema and self._table_exists(self.schema.version_table_name):
+            execute_sql(
+                self.config,
+                f"DELETE FROM {qualified_table_name(self.config, self.schema.version_table_name)} "
+                f"WHERE schema_name = {escape_duckdb_literal(self.schema.name)}",
+            )
 
     def update_stored_schema(
         self,

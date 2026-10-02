@@ -182,3 +182,45 @@ def test_integer_widening_and_nanosecond_timestamps_round_trip(
     assert result.column("value").to_pylist() == [Decimal(value) for value in values]
     assert result.schema.field("instant").type == pa.timestamp("ns")
     assert result.column("instant").cast(pa.int64()).to_pylist() == instants
+
+
+@pytest.mark.parametrize("write_disposition", ["append", "replace"])
+@pytest.mark.parametrize("change", ["drop_column", "reorder"])
+def test_refresh_recreates_columns_and_restores_schema(
+    pipeline_factory, write_disposition, change, monkeypatch
+):
+    monkeypatch.setenv("DESTINATION__ALTERTABLE__ALLOW_DESTRUCTIVE_REFRESH", "true")
+    pipeline = pipeline_factory("original")
+    pipeline.run([{"id": 1, "removed": "old"}], table_name="events")
+    old_schema_hash = pipeline.default_schema.stored_version_hash
+    columns = {"id": [2]} if change == "drop_column" else {"removed": ["new"], "id": [2]}
+    pipeline.run(
+        pa.table(columns),
+        table_name="events",
+        write_disposition=write_disposition,
+        refresh="drop_resources",
+    )
+    fresh_pipeline = pipeline_factory("fresh")
+    fresh_pipeline.sync_destination()
+
+    with fresh_pipeline.destination_client() as client:
+        assert client.get_stored_schema_by_hash(old_schema_hash) is None
+    assert list(fresh_pipeline.default_schema.tables["events"]["columns"]) == list(columns)
+    assert fresh_pipeline.dataset().events.select("id").fetchall() == [(2,)]
+
+
+def test_refresh_without_opt_in_preserves_rows_and_stored_schema(pipeline_factory):
+    from dlt.pipeline.exceptions import PipelineStepFailed
+
+    pipeline = pipeline_factory("original")
+    pipeline.run([{"id": 1}], table_name="events")
+    old_schema_hash = pipeline.default_schema.stored_version_hash
+
+    with pytest.raises(PipelineStepFailed, match="allow_destructive_refresh=True"):
+        pipeline.run([{"id": 2}], table_name="events", refresh="drop_resources")
+
+    fresh_pipeline = pipeline_factory("fresh")
+    fresh_pipeline.sync_destination()
+    with fresh_pipeline.destination_client() as client:
+        assert client.get_stored_schema_by_hash(old_schema_hash) is not None
+    assert fresh_pipeline.dataset().events.select("id").fetchall() == [(1,)]
