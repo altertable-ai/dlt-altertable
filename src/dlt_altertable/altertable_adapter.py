@@ -26,7 +26,7 @@ def altertable_adapter(
 ) -> DltResource:
     """Set ordered partition keys on a dlt resource."""
     if sort is not None:
-        raise TerminalValueError("Sort hints are not supported yet.")
+        raise NotImplementedError("Sort hints are unsupported.")
     if partition is None:
         raise TerminalValueError("Specify partition in altertable_adapter.")
     resource = get_resource_for_adapter(data)

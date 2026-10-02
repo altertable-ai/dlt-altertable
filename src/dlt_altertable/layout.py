@@ -8,6 +8,7 @@ from dlt.common.schema import TTableSchema
 type PartitionTransform = Literal["identity", "year", "month", "day", "hour", "bucket"]
 
 PARTITION_HINT: str = "x-altertable-partition"
+MAX_SIGNED_INT32 = 2**31 - 1
 
 
 class PartitionKey(TypedDict):
@@ -44,8 +45,10 @@ def partition_keys(keys: object) -> list[PartitionKey]:
         item: PartitionKey = {"column": column, "transform": transform}
         buckets = entry.get("buckets")
         if transform == "bucket":
-            if type(buckets) is not int or not 0 < buckets <= 2**31 - 1:
-                raise TerminalValueError("Bucket count must be an integer in 1..2147483647.")
+            if type(buckets) is not int or not 0 < buckets <= MAX_SIGNED_INT32:
+                raise TerminalValueError(
+                    f"Bucket count must be a signed 32-bit integer in 1..{MAX_SIGNED_INT32}."
+                )
             item["buckets"] = buckets
         elif "buckets" in entry:
             raise TerminalValueError("Only bucket transforms accept a bucket count.")
@@ -59,7 +62,7 @@ def partition_expressions(table: TTableSchema | PreparedTableSchema) -> list[str
     if "x-altertable-sort" in table or any(
         "sort" in column for column in table["columns"].values()
     ):
-        raise TerminalValueError("Sort hints are not supported yet.")
+        raise NotImplementedError("Sort hints are unsupported.")
     if PARTITION_HINT in table:
         keys = partition_keys(table.get(PARTITION_HINT))
     elif any("partition" in column for column in table["columns"].values()):

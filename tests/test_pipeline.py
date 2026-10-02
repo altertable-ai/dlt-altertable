@@ -386,7 +386,7 @@ def test_invalid_layout_prevents_other_tables_from_loading(server: FakeServer, r
             invalid.apply_hints(
                 additional_table_hints={"x-altertable-sort": ["value"] if hint == "sort" else []}
             )
-        message = "Sort hints are not supported yet"
+        message = "Sort hints are unsupported"
 
     with pytest.raises(PipelineStepFailed, match=message):
         run_pipeline([valid, invalid])

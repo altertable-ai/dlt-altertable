@@ -1,5 +1,4 @@
 import pytest
-from dlt.common.exceptions import TerminalValueError
 
 from dlt_altertable import altertable_adapter, altertable_partition
 from dlt_altertable.altertable_adapter import SortKey
@@ -17,7 +16,7 @@ def test_adapter_accepts_typed_lists() -> None:
 
 def test_typed_sort_keys_fail_explicitly() -> None:
     sort_keys: list[SortKey] = [{"column": "created_at", "direction": "desc"}]
-    with pytest.raises(TerminalValueError, match="Sort hints are not supported yet"):
+    with pytest.raises(NotImplementedError, match="Sort hints are unsupported"):
         altertable_adapter([], sort=sort_keys)
 
 

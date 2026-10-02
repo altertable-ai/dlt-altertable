@@ -60,7 +60,7 @@ def test_adapter_rejects_sort_without_modifying_resource(sort):
     resource = dlt.resource([], name="events")
     original = resource.compute_table_schema()
 
-    with pytest.raises(TerminalValueError, match="Sort hints are not supported yet"):
+    with pytest.raises(NotImplementedError, match="Sort hints are unsupported"):
         altertable_adapter(resource, partition="category", sort=sort)
 
     assert resource.compute_table_schema() == original
@@ -139,7 +139,8 @@ def test_adapter_rejects_unsupported_partition_specs_as_value_errors(partition):
 def test_invalid_layout_fails_before_any_query(server: FakeServer, hint, keys):
     table = events_table()
     table[hint] = keys
-    with pytest.raises(TerminalValueError):
+    error_type = NotImplementedError if hint == "x-altertable-sort" else TerminalValueError
+    with pytest.raises(error_type):
         create_or_evolve_table(make_config(), table)
     assert server.statements == []
 
