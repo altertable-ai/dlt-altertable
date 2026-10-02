@@ -26,6 +26,9 @@ if TYPE_CHECKING:
 
 type IngestMode = Literal["append", "overwrite", "upsert"]
 
+DEFAULT_UPLOAD_FILE_SIZE_BYTES = 128 * 1024**2
+NANOSECOND_TIMESTAMP_PRECISION = 9
+
 
 def primary_key_columns(table: TTableSchema) -> list[str]:
     return get_columns_names_with_prop(table, "primary_key")
@@ -154,7 +157,9 @@ class altertable(CustomDestination):
     def _raw_capabilities(self) -> DestinationCapabilitiesContext:
         caps = super()._raw_capabilities()
         caps.sqlglot_dialect = "duckdb"
-        caps.max_timestamp_precision = 9
+        caps.max_timestamp_precision = NANOSECOND_TIMESTAMP_PRECISION
+        caps.recommended_file_size = DEFAULT_UPLOAD_FILE_SIZE_BYTES
+        caps.max_parallel_load_jobs = 1
         caps.parquet_format = ParquetFormatConfiguration(version="2.6")
         caps.escape_identifier = escape_postgres_identifier
         caps.escape_literal = escape_duckdb_literal
