@@ -123,13 +123,22 @@ def test_drop_tables_accepts_the_destination_opt_in(server, tmp_path):
     assert server.statements == ['DROP TABLE IF EXISTS "lakehouse"."raw"."event""names"']
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "worker lease expired",
+        "Permission Error: access denied",
+        "Parser Error: invalid query",
+        "Binder Error: Referenced column missing_column not found in FROM clause!",
+    ],
+)
 @pytest.mark.parametrize("unauthenticated", [False, True])
-def test_state_lookup_errors_preserve_local_state(server, pipeline, unauthenticated):
+def test_state_lookup_errors_preserve_local_state(server, pipeline, unauthenticated, message):
     pipeline.run([{"id": 1}], table_name="events")
     state = pipeline.state
     server.unauthenticated = unauthenticated
-    server.query_error = "worker lease expired"
-    message = "Invalid credentials" if unauthenticated else "worker lease expired"
+    server.query_error = message
+    message = "Invalid credentials" if unauthenticated else message
 
     with pytest.raises(PipelineStepFailed, match=message):
         pipeline.sync_destination()
@@ -137,11 +146,30 @@ def test_state_lookup_errors_preserve_local_state(server, pipeline, unauthentica
     assert pipeline.state == state
 
 
-@pytest.mark.parametrize("payload", ["", "{}", "{}\n{}", "{}\n[]\n{}"])
-def test_malformed_state_response_is_not_empty_storage(monkeypatch, pipeline, payload):
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "",
+        "{}",
+        "{}\n{}",
+        "{}\n[1]",
+        '{}\n[{"name": "id"}]',
+        '{}\n[{"name": "id", "type": 1}]',
+        "{}\n[]\n{}",
+        '{}\n[]\n{"error": {}}',
+        '{"error": "Catalog Error: Table with name fake does not exist!"}\n[]',
+        '{}\n{}\n{"error": "Catalog Error: Table with name fake does not exist!"}',
+        '{}\n{"error": "Catalog Error: Table with name fake does not exist!"}\n[]',
+        '{}\n[]\n{"error": "Catalog Error: Table with name fake does not exist!"}\n[1]',
+    ],
+)
+def test_malformed_state_response_is_not_empty_storage(server, monkeypatch, pipeline, payload):
+    pipeline.run([{"id": 1}], table_name="events")
+    state = pipeline.state
     monkeypatch.setattr(
         dlt_altertable.api.session, "post", lambda *args, **kwargs: FakeResponse(200, payload)
     )
 
     with pytest.raises(PipelineStepFailed, match="Malformed query response"):
         pipeline.sync_destination()
+    assert pipeline.state == state

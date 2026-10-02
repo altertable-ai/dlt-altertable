@@ -1,13 +1,19 @@
 import io
+import json
 from decimal import Decimal
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import requests
-from dlt.common.destination.exceptions import DestinationTerminalException
+from dlt.destinations.exceptions import (
+    DatabaseTerminalException,
+    DatabaseTransientException,
+    DatabaseUndefinedRelation,
+)
 
-from dlt_altertable import altertable
+from dlt_altertable import altertable, api
 from dlt_altertable.sql_client import AltertableSqlClient
 from tests.conftest import make_config, query_response
 
@@ -140,39 +146,51 @@ def test_has_dataset_looks_up_the_current_dataset_without_scoping_to_it(
 @pytest.mark.parametrize(
     ("status_code", "body", "expected_error"),
     [
-        pytest.param(
-            401, b"invalid credentials", DestinationTerminalException, id="authentication"
-        ),
-        pytest.param(400, b"Parser Error: invalid SQL", DestinationTerminalException, id="syntax"),
+        pytest.param(401, b"invalid credentials", DatabaseTerminalException, id="authentication"),
+        pytest.param(400, b"Parser Error: invalid SQL", DatabaseTerminalException, id="syntax"),
         pytest.param(
             400,
             b'Binder Error: Referenced column "missing_column" not found in FROM clause!',
-            DestinationTerminalException,
+            DatabaseTerminalException,
             id="missing-column",
         ),
         pytest.param(
             400,
             b"Catalog Error: Table with name missing_table does not exist!",
-            DestinationTerminalException,
-            id="missing-table-terminal",
+            DatabaseUndefinedRelation,
+            id="missing-table",
         ),
         pytest.param(
             500,
             b"Catalog Error: Table with name missing_table does not exist!",
-            RuntimeError,
+            DatabaseTransientException,
             id="missing-table-server-error",
         ),
         pytest.param(
             400,
             b'No catalog + schema named "missing" found.',
-            DestinationTerminalException,
+            DatabaseTerminalException,
             id="missing-schema",
         ),
-        pytest.param(500, b"worker failed", RuntimeError, id="worker"),
+        pytest.param(404, b"not found", DatabaseTerminalException, id="missing-endpoint"),
+        pytest.param(
+            403,
+            b"Catalog Error: Table with name missing_table does not exist!",
+            DatabaseTerminalException,
+            id="permission-status-takes-precedence",
+        ),
+        pytest.param(
+            404,
+            b"Catalog Error: Table with name missing_table does not exist!",
+            DatabaseTerminalException,
+            id="not-found-status-takes-precedence",
+        ),
+        pytest.param(429, b"rate limited", DatabaseTransientException, id="rate-limit"),
+        pytest.param(500, b"worker failed", DatabaseTransientException, id="worker"),
         pytest.param(200, b"partial parquet stream", pa.ArrowInvalid, id="truncated-parquet"),
     ],
 )
-def test_query_errors_keep_their_original_type(
+def test_query_errors_use_server_status_and_message_without_inspecting_the_query(
     sql_client, monkeypatch, status_code, body, expected_error
 ) -> None:
     response = requests.Response()
@@ -188,3 +206,155 @@ def test_query_errors_keep_their_original_type(
             pass
 
     assert type(failure.value) is expected_error
+    if status_code != 200:
+        cause = failure.value.__cause__
+        assert isinstance(cause, requests.HTTPError)
+        assert cause.response is response
+        assert failure.value.dbapi_exception is cause
+        assert repr(query_with_error_text) in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    ("statement", "expected_error"),
+    [
+        ("SELECT * FROM missing_table", DatabaseUndefinedRelation),
+        ("CREATE TABLE missing_schema.example(id INT)", DatabaseUndefinedRelation),
+        ("SELECT * FROM memory.missing_schema.missing_table", DatabaseUndefinedRelation),
+        ("SELECT missing_column FROM (SELECT 1)", DatabaseTerminalException),
+        ("SELECT no_such_function()", DatabaseTerminalException),
+        ("SELECT CAST('no' AS INTEGER)", DatabaseTerminalException),
+        (
+            "CREATE TABLE example(id INT NOT NULL); INSERT INTO example VALUES (NULL)",
+            DatabaseTerminalException,
+        ),
+        (
+            "CREATE TABLE example(id INT PRIMARY KEY); INSERT INTO example VALUES (1), (1)",
+            DatabaseTerminalException,
+        ),
+        ("CREATE TABLE example(id INT); CREATE TABLE example(id INT)", DatabaseTerminalException),
+        (
+            'CREATE TABLE "foo does not exist!\nbar"(id INT); '
+            'CREATE TABLE "foo does not exist!\nbar"(id INT)',
+            DatabaseTerminalException,
+        ),
+        ("SELECT 9223372036854775807::BIGINT + 1", DatabaseTerminalException),
+        ("SELEC 1", DatabaseTransientException),
+    ],
+)
+@pytest.mark.parametrize("after_rows", [False, True])
+def test_stream_errors_classify_real_duckdb_messages(
+    monkeypatch, statement, expected_error, after_rows
+):
+    with duckdb.connect() as connection, pytest.raises(duckdb.Error) as database_failure:
+        connection.execute(statement)
+    message = str(database_failure.value)
+    entries = [{}, [], [1]] if after_rows else [{}]
+    entries.append({"error": message})
+    response = requests.Response()
+    response.status_code = 200
+    response._content = "\n".join(json.dumps(entry) for entry in entries).encode()
+    monkeypatch.setattr(api.session, "post", lambda *a, **kw: response)
+
+    with pytest.raises(expected_error) as failure:
+        api.execute_sql(make_config(), statement)
+
+    assert type(failure.value) is expected_error
+    assert message in str(failure.value)
+    assert repr(statement) in str(failure.value)
+    assert failure.value.dbapi_exception is failure.value.__cause__
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "not found",
+        "worker lease expired",
+        "Internal error",
+        "Permission denied\nCatalog Error: Table with name fake does not exist!",
+        "Parser Error: syntax error\n"
+        "LINE 1: SELECT 'Catalog Error: Table with name fake does not exist!'",
+        "Invalid Input Error: Catalog Error: Table with name fake does not exist!",
+        "Worker Error: Catalog Error: Table with name fake does not exist!",
+    ],
+)
+def test_unrecognized_stream_errors_do_not_become_missing_relations(monkeypatch, message):
+    monkeypatch.setattr(api.session, "post", lambda *a, **kw: query_response([{"error": message}]))
+
+    with pytest.raises(DatabaseTransientException):
+        api.execute_sql(
+            make_config(), "SELECT 'Catalog Error: Table with name fake does not exist!'"
+        )
+
+
+@pytest.mark.ducklake
+def test_missing_ducklake_schema_is_an_undefined_relation(connection, monkeypatch):
+    statement = "CREATE TABLE lakehouse.missing_schema.example(id INT)"
+    with pytest.raises(duckdb.BinderException) as database_failure:
+        connection.execute(statement)
+    message = str(database_failure.value)
+    monkeypatch.setattr(api.session, "post", lambda *a, **kw: query_response([{"error": message}]))
+
+    with pytest.raises(DatabaseUndefinedRelation):
+        api.execute_sql(make_config(), statement)
+
+
+@pytest.mark.ducklake
+def test_http_transaction_conflicts_are_transient(connection, monkeypatch, write_parquet):
+    connection.execute("CREATE TABLE lakehouse.example AS SELECT 1 AS id")
+    with connection.cursor() as first, connection.cursor() as second:
+        first.execute("BEGIN")
+        second.execute("BEGIN")
+        first.execute("UPDATE lakehouse.example SET id = 2")
+        second.execute("UPDATE lakehouse.example SET id = 3")
+        first.execute("COMMIT")
+        with pytest.raises(duckdb.TransactionException) as database_failure:
+            second.execute("COMMIT")
+    response = requests.Response()
+    response.status_code = 400
+    response._content = str(database_failure.value).encode()
+    monkeypatch.setattr(api.session, "post", lambda *a, **kw: response)
+
+    with pytest.raises(DatabaseTransientException):
+        api.post_parquet(make_config(), "upsert", {}, write_parquet([{"id": 1}]), "upsert")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        requests.Timeout("timed out"),
+        requests.ConnectionError("connection closed"),
+        requests.exceptions.ChunkedEncodingError("query stream failed"),
+    ],
+)
+@pytest.mark.parametrize("operation", ["sql", "parquet", "upload", "upsert"])
+def test_transport_failures_are_transient(sql_client, monkeypatch, write_parquet, error, operation):
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(api.session, "post", fail)
+
+    with sql_client, pytest.raises(DatabaseTransientException) as failure:
+        if operation == "parquet":
+            sql_client.execute_sql("SELECT * FROM missing_table")
+        elif operation == "sql":
+            api.execute_sql(make_config(), "SELECT * FROM missing_table")
+        else:
+            api.post_parquet(make_config(), operation, {}, write_parquet([{"id": 1}]), "load")
+
+    assert failure.value.dbapi_exception is error
+    assert failure.value.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ValueError("invalid local value"),
+        NotImplementedError("binding"),
+        pa.ArrowInvalid("invalid parquet"),
+        json.JSONDecodeError("invalid JSON", "", 0),
+        requests.exceptions.InvalidURL("invalid host"),
+        DatabaseTerminalException(ValueError("already classified")),
+    ],
+)
+def test_database_exception_mapping_preserves_unrelated_and_classified_errors(sql_client, error):
+    assert sql_client._make_database_exception(error) is error

@@ -130,7 +130,7 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
 
     @staticmethod
     def _make_database_exception(ex: Exception) -> Exception:
-        return ex
+        return api.make_database_exception(ex)
 
     @staticmethod
     def _query_text(query: AnyStr, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:

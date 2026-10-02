@@ -11,7 +11,13 @@ from dlt.common.schema.exceptions import SchemaIdentifierNormalizationCollision
 from dlt.pipeline.exceptions import PipelineStepFailed
 
 from dlt_altertable import altertable, altertable_partition
-from tests.conftest import DESTINATION_OPTIONS, FakeServer, RecordedRequest
+from tests.conftest import (
+    DESTINATION_OPTIONS,
+    FakeResponse,
+    FakeServer,
+    RecordedRequest,
+    query_response,
+)
 
 CONTACTS = [
     {"id": 1, "email": "ada@example.com", "lastmodifieddate": 10},
@@ -174,6 +180,73 @@ def test_terminal_failures_are_not_retried(server: FakeServer, run_pipeline) -> 
         run_pipeline(appended_events())
 
     assert server.attempts_for("events") == 1
+
+
+@pytest.mark.parametrize("write_disposition", ["append", "merge"])
+@pytest.mark.parametrize(
+    ("status_code", "message", "retryable"),
+    [
+        pytest.param(
+            400, "TransactionContext Error: Conflict on update!", True, id="transaction-conflict"
+        ),
+        pytest.param(
+            400, "Catalog Error: Table with name events does not exist!", False, id="missing-table"
+        ),
+        pytest.param(401, "Invalid credentials", False, id="invalid-credentials"),
+        pytest.param(429, "Rate limited", True, id="rate-limit"),
+        pytest.param(503, "No compute capacity", True, id="compute-unavailable"),
+        pytest.param(
+            200, "Constraint Error: NOT NULL constraint failed: events.id", False, id="null-value"
+        ),
+        pytest.param(
+            200,
+            "Conversion Error: Could not convert string 'no' to INT32",
+            False,
+            id="invalid-conversion",
+        ),
+        pytest.param(200, "worker lease expired", True, id="expired-worker"),
+    ],
+)
+def test_load_retries_only_transient_database_errors(
+    server, run_pipeline, monkeypatch, write_disposition, status_code, message, retryable
+):
+    post = server.post
+    attempts = 0
+
+    def fail_first_request(url, **kwargs):
+        nonlocal attempts
+        statement = kwargs.get("json", {}).get("statement", "")
+        is_data_table_request = (
+            statement.startswith('CREATE TABLE IF NOT EXISTS "lakehouse"."raw"."events"')
+            if status_code == 200
+            else kwargs.get("params", {}).get("table") == "events"
+        )
+        if is_data_table_request:
+            attempts += 1
+            if attempts == 1:
+                return (
+                    query_response([{"error": message}])
+                    if status_code == 200
+                    else FakeResponse(status_code, message)
+                )
+        return post(url, **kwargs)
+
+    monkeypatch.setattr(server, "post", fail_first_request)
+    resource = dlt.resource(
+        [{"id": 1}], name="events", primary_key="id", write_disposition=write_disposition
+    )
+
+    if retryable:
+        run_pipeline(resource)
+    else:
+        with pytest.raises(PipelineStepFailed) as failure:
+            run_pipeline(resource)
+        assert message in str(failure.value)
+
+    assert attempts == (2 if retryable else 1)
+    assert without_lineage(
+        [row for upload in server.uploads_for("events") for row in upload.rows]
+    ) == ([{"id": 1}] if retryable else [])
 
 
 def test_replace_resumes_as_append_after_a_failed_file(

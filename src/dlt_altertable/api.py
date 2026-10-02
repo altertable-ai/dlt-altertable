@@ -1,10 +1,15 @@
 import json
+import re
 from http import HTTPStatus
 from importlib.metadata import version
 from typing import Any
 
 import requests
-from dlt.common.destination.exceptions import DestinationTerminalException
+from dlt.destinations.exceptions import (
+    DatabaseTerminalException,
+    DatabaseTransientException,
+    DatabaseUndefinedRelation,
+)
 from requests.adapters import HTTPAdapter
 from requests.utils import default_user_agent
 
@@ -22,6 +27,59 @@ TERMINAL_STATUSES = {
     HTTPStatus.NOT_FOUND,
     HTTPStatus.METHOD_NOT_ALLOWED,
 }
+TRANSPORT_ERRORS = (
+    requests.Timeout,
+    requests.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+)
+
+
+class QueryError(RuntimeError):
+    def __init__(self, statement: str, server_message: str) -> None:
+        self.server_message = server_message
+        super().__init__(f"Query failed mid-stream: {server_message}\nSQL: {statement!r}")
+
+
+def make_database_exception(ex: Exception) -> Exception:
+    if isinstance(ex, TRANSPORT_ERRORS):
+        return DatabaseTransientException(ex)
+    if isinstance(ex, requests.HTTPError) and ex.response is not None:
+        status = ex.response.status_code
+        if status != HTTPStatus.BAD_REQUEST:
+            return (
+                DatabaseTerminalException(ex)
+                if status in TERMINAL_STATUSES
+                else DatabaseTransientException(ex)
+            )
+        message = ex.response.text
+    elif isinstance(ex, QueryError):
+        message = ex.server_message
+    else:
+        return ex
+
+    first_line = message.partition("\n")[0]
+    if first_line.startswith(("TransactionContext Error: ", "Transaction Error: ")):
+        return DatabaseTransientException(ex)
+    if re.fullmatch(
+        r'Catalog Error: (?:(?:Table|Schema) with name [^"\r\n]+ does not exist!|'
+        r'Table with name "[^"\r\n]+" does not exist because schema "[^"\r\n]+" does not exist\.)|'
+        r'Binder Error: Schema "[^"\r\n]+" not found in DuckLakeCatalog "[^"\r\n]+"',
+        first_line,
+    ):
+        return DatabaseUndefinedRelation(ex)
+    if isinstance(ex, requests.HTTPError) or first_line.startswith(
+        (
+            "Catalog Error: ",
+            "Binder Error: ",
+            "Conversion Error: ",
+            "Constraint Error: ",
+            "Out of Range Error: ",
+            "Not implemented Error: ",
+            "Permission Error: ",
+        )
+    ):
+        return DatabaseTerminalException(ex)
+    return DatabaseTransientException(ex)
 
 
 class LargeBlockAdapter(HTTPAdapter):
@@ -44,9 +102,8 @@ def raise_for_failure(response: requests.Response, action: str) -> None:
     if response.status_code == HTTPStatus.OK:
         return
     detail = f"HTTP {response.status_code}: {response.text.strip()[:2000]}\nOperation: {action}"
-    if response.status_code in TERMINAL_STATUSES:
-        raise DestinationTerminalException(detail)
-    raise RuntimeError(detail)
+    error = requests.HTTPError(detail, response=response)
+    raise make_database_exception(error) from error
 
 
 def post_query(
@@ -61,12 +118,15 @@ def post_query(
         payload["format"] = output_format
     if dataset_name is not None:
         payload.update(catalog=config.catalog, schema=dataset_name)
-    response = session.post(
-        f"{config.base_url}/query",
-        json=payload,
-        auth=config.basic_auth,
-        timeout=QUERY_TIMEOUT,
-    )
+    try:
+        response = session.post(
+            f"{config.base_url}/query",
+            json=payload,
+            auth=config.basic_auth,
+            timeout=QUERY_TIMEOUT,
+        )
+    except TRANSPORT_ERRORS as ex:
+        raise make_database_exception(ex) from ex
     raise_for_failure(response, f"query {statement!r}")
     return response
 
@@ -74,15 +134,28 @@ def post_query(
 def execute_sql(config: AltertableClientConfiguration, statement: str) -> list[list]:
     response = post_query(config, statement)
     payload = [json.loads(line) for line in response.text.splitlines() if line.strip()]
-    for entry in payload:
-        if isinstance(entry, dict) and "error" in entry:
-            raise RuntimeError(f"Query failed mid-stream: {entry['error']}\nSQL: {statement}")
-    if (
-        len(payload) < 2
-        or not isinstance(payload[0], dict)
-        or not all(isinstance(entry, list) for entry in payload[1:])
-    ):
+    if len(payload) < 2 or not isinstance(payload[0], dict) or "error" in payload[0]:
         raise RuntimeError(f"Malformed query response for {statement!r}: missing headers or rows.")
+    if isinstance(payload[1], list) and not all(
+        isinstance(column, dict)
+        and isinstance(column.get("name"), str)
+        and isinstance(column.get("type"), str)
+        for column in payload[1]
+    ):
+        raise RuntimeError(f"Malformed query response for {statement!r}: invalid column headers.")
+    for index, entry in enumerate(payload[1:], 1):
+        if isinstance(entry, list):
+            continue
+        if (
+            index != len(payload) - 1
+            or not isinstance(entry, dict)
+            or not isinstance(entry.get("error"), str)
+        ):
+            raise RuntimeError(
+                f"Malformed query response for {statement!r}: invalid rows or error."
+            )
+        error = QueryError(statement, entry["error"])
+        raise make_database_exception(error) from error
     return payload[2:]
 
 
@@ -94,12 +167,15 @@ def post_parquet(
     action: str,
 ) -> None:
     with open(parquet_file_path, "rb") as parquet_file:
-        response = session.post(
-            f"{config.base_url}/{endpoint}",
-            params=params,
-            data=parquet_file,
-            auth=config.basic_auth,
-            headers={"Content-Type": "application/parquet"},
-            timeout=UPLOAD_TIMEOUT,
-        )
+        try:
+            response = session.post(
+                f"{config.base_url}/{endpoint}",
+                params=params,
+                data=parquet_file,
+                auth=config.basic_auth,
+                headers={"Content-Type": "application/parquet"},
+                timeout=UPLOAD_TIMEOUT,
+            )
+        except TRANSPORT_ERRORS as ex:
+            raise make_database_exception(ex) from ex
     raise_for_failure(response, action)
