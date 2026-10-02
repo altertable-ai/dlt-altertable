@@ -1,6 +1,7 @@
 import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -40,7 +41,9 @@ def mock_config() -> Iterator[AltertableClientConfiguration]:
 def pipeline_factory(
     mock_config: AltertableClientConfiguration, tmp_path: Path
 ) -> Callable[..., dlt.Pipeline]:
-    def create(directory: str, pipeline_name: str = "state_restore") -> dlt.Pipeline:
+    def create(
+        directory: str, pipeline_name: str = "state_restore", **destination_options: Any
+    ) -> dlt.Pipeline:
         return dlt.pipeline(
             pipeline_name=pipeline_name,
             destination=altertable(
@@ -51,6 +54,7 @@ def pipeline_factory(
                 password=mock_config.password,
                 catalog=mock_config.catalog,
                 dataset_name=mock_config.dataset_name,
+                **destination_options,
             ),
             pipelines_dir=str(tmp_path / directory),
         )
