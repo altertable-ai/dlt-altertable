@@ -1,6 +1,6 @@
 [project]
 name = "dlt-altertable"
-version = "0.1.5"
+version = "0.1.6"
 description = "dlt destination that loads into the Altertable lakehouse through its HTTP API"
 readme = "README.md"
 authors = [{ name = "Altertable", email = "hello@altertable.ai" }]
