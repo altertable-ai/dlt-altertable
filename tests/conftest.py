@@ -115,6 +115,32 @@ class FakeServer:
     def creates(self) -> list[str]:
         return [statement for statement in self.statements if statement.startswith("CREATE")]
 
+    def post_query(self, payload: dict[str, Any]) -> FakeResponse:
+        statement = payload["statement"]
+        self.statements.append(statement)
+        self.query_payloads.append(dict(payload))
+        if self.query_error is not None:
+            return query_response([{"error": self.query_error}])
+        if statement.startswith(("ALTER", "CREATE")):
+            return query_response([])
+        if "information_schema.tables" in statement:
+            landed = {upload.params["table"] for upload in self.uploads}
+            return query_response([[t] for t in sorted(landed - set(self.missing_tables))])
+        if "duckdb_databases" in statement:
+            excluded = {"memory"} if "database_name <> 'memory'" in statement else set()
+            return query_response(
+                [
+                    [name, readonly]
+                    for name, readonly in self.catalogs.items()
+                    if name not in excluded
+                ]
+            )
+        if statement.startswith("SELECT count"):
+            return self.count_query_response(statement)
+        if statement.startswith("SELECT column_name, data_type"):
+            return query_response([[column, "BIGINT"] for column in self.existing_columns])
+        return query_response([[column] for column in self.existing_columns])
+
     def post(
         self,
         url: str,
@@ -129,30 +155,7 @@ class FakeServer:
             return FakeResponse(401, "Invalid credentials")
 
         if url.endswith("/query"):
-            statement = json["statement"]
-            self.statements.append(statement)
-            self.query_payloads.append(dict(json))
-            if self.query_error is not None:
-                return query_response([{"error": self.query_error}])
-            if statement.startswith(("ALTER", "CREATE")):
-                return query_response([])
-            if "information_schema.tables" in statement:
-                landed = {upload.params["table"] for upload in self.uploads}
-                return query_response([[t] for t in sorted(landed - set(self.missing_tables))])
-            if "duckdb_databases" in statement:
-                excluded = {"memory"} if "database_name <> 'memory'" in statement else set()
-                return query_response(
-                    [
-                        [name, readonly]
-                        for name, readonly in self.catalogs.items()
-                        if name not in excluded
-                    ]
-                )
-            if statement.startswith("SELECT count"):
-                return self.count_query_response(statement)
-            if statement.startswith("SELECT column_name, data_type"):
-                return query_response([[column, "BIGINT"] for column in self.existing_columns])
-            return query_response([[column] for column in self.existing_columns])
+            return self.post_query(json)
 
         table_name = params["table"]
         if not table_name.startswith("_dlt"):

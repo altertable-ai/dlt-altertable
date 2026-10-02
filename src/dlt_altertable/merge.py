@@ -108,16 +108,30 @@ def stage_file(config: AltertableClientConfiguration, path: object, table: TTabl
     table_uploads[staging_table_name] = True
 
 
-def merge_statements(
+def _staging_source_sql(
+    table_name: str,
+    sql_client: AltertableSqlClient,
+    staging_tables: Mapping[str, Sequence[str]],
+) -> str:
+    target_table_name, _ = sql_client.get_qualified_table_names(table_name)
+    return (
+        " UNION ALL BY NAME ".join(
+            f"SELECT * FROM {sql_client.get_qualified_table_names(name)[1]}"
+            for name in staging_tables.get(table_name, ())
+        )
+        or f"SELECT * FROM {target_table_name} WHERE FALSE"
+    )
+
+
+def _root_staging_statements(
     table_chain: Sequence[PreparedTableSchema],
     sql_client: AltertableSqlClient,
     staging_tables: Mapping[str, Sequence[str]],
 ) -> list[str]:
-    statements: list[str] = []
     root_table = table_chain[0]
     root_table_name = cast(str, root_table["name"])
+    target_table_name, staging_table_name = sql_client.get_qualified_table_names(root_table_name)
     column_hints: TTableSchema = {"columns": root_table["columns"]}
-    _, staging_root_table_name = sql_client.get_qualified_table_names(root_table_name)
     primary_keys = [
         escape_postgres_identifier(key)
         for key in get_columns_names_with_prop(column_hints, "primary_key")
@@ -125,56 +139,58 @@ def merge_statements(
     primary_key_sql = ", ".join(primary_keys)
     dedup_sort = get_dedup_sort_tuple(column_hints)
     cursor_column = escape_postgres_identifier(dedup_sort[0]) if dedup_sort else None
-    has_nested_tables = len(table_chain) > 1
-    for table in table_chain:
-        table_name = cast(str, table["name"])
-        target_table_name, staging_table_name = sql_client.get_qualified_table_names(table_name)
-        is_root_table = table_name == root_table_name
+    source_sql = _staging_source_sql(root_table_name, sql_client, staging_tables)
+    if len(table_chain) == 1:
+        order = f"{cursor_column} DESC NULLS LAST" if cursor_column else primary_key_sql
         source_sql = (
-            " UNION ALL BY NAME ".join(
-                f"SELECT * FROM {sql_client.get_qualified_table_names(name)[1]}"
-                for name in staging_tables.get(table_name, ())
-            )
-            or f"SELECT * FROM {target_table_name} WHERE FALSE"
+            f"SELECT * FROM ({source_sql}) "
+            f"QUALIFY row_number() OVER (PARTITION BY {primary_key_sql} ORDER BY {order}) = 1"
         )
-        if is_root_table and not has_nested_tables:
-            order = f"{cursor_column} DESC NULLS LAST" if cursor_column else primary_key_sql
-            source_sql = (
-                f"SELECT * FROM ({source_sql}) "
-                f"QUALIFY row_number() OVER (PARTITION BY {primary_key_sql} ORDER BY {order}) = 1"
-            )
+    statements = [f"CREATE OR REPLACE TABLE {staging_table_name} AS {source_sql};"]
+    if len(table_chain) > 1:
+        message = escape_duckdb_literal(
+            f"Table {root_table_name}: nested upsert requires one row per primary key per load."
+        )
+        statements.append(
+            f"SELECT CASE WHEN count(*) = count(DISTINCT row({primary_key_sql})) "
+            f"THEN TRUE ELSE error({message}) END FROM {staging_table_name};"
+        )
+    if cursor_column:
+        primary_key_match = " AND ".join(f"s.{key} = d.{key}" for key in primary_keys)
+        incoming_is_newer = (
+            f"(s.{cursor_column} > d.{cursor_column} "
+            f"OR (d.{cursor_column} IS NULL AND s.{cursor_column} IS NOT NULL))"
+        )
+        statements.append(
+            f"DELETE FROM {staging_table_name} AS s WHERE EXISTS "
+            f"(SELECT 1 FROM {target_table_name} AS d "
+            f"WHERE {primary_key_match} AND NOT ({incoming_is_newer} IS TRUE));"
+        )
+    return statements
+
+
+def merge_statements(
+    table_chain: Sequence[PreparedTableSchema],
+    sql_client: AltertableSqlClient,
+    staging_tables: Mapping[str, Sequence[str]],
+) -> list[str]:
+    statements = _root_staging_statements(table_chain, sql_client, staging_tables)
+    root_table = table_chain[0]
+    _, staging_root_table_name = sql_client.get_qualified_table_names(cast(str, root_table["name"]))
+    for table in table_chain[1:]:
+        table_name = cast(str, table["name"])
+        _, staging_table_name = sql_client.get_qualified_table_names(table_name)
+        source_sql = _staging_source_sql(table_name, sql_client, staging_tables)
         statements.append(f"CREATE OR REPLACE TABLE {staging_table_name} AS {source_sql};")
-        if is_root_table:
-            if has_nested_tables:
-                message = escape_duckdb_literal(
-                    f"Table {root_table_name}: nested upsert requires "
-                    "one row per primary key per load."
-                )
-                statements.append(
-                    f"SELECT CASE WHEN count(*) = count(DISTINCT row({primary_key_sql})) "
-                    f"THEN TRUE ELSE error({message}) END FROM {staging_table_name};"
-                )
-            if cursor_column:
-                primary_key_match = " AND ".join(f"s.{key} = d.{key}" for key in primary_keys)
-                incoming_is_newer = (
-                    f"(s.{cursor_column} > d.{cursor_column} "
-                    f"OR (d.{cursor_column} IS NULL AND s.{cursor_column} IS NOT NULL))"
-                )
-                statements.append(
-                    f"DELETE FROM {staging_table_name} AS s WHERE EXISTS "
-                    f"(SELECT 1 FROM {target_table_name} AS d "
-                    f"WHERE {primary_key_match} AND NOT ({incoming_is_newer} IS TRUE));"
-                )
-        else:
-            root_key_column = escape_postgres_identifier(
-                MergeThenDeleteJob.get_root_key_col(table_chain, table, "", "")
-            )
-            root_row_key_column = escape_postgres_identifier(
-                MergeThenDeleteJob.get_row_key_col(table_chain, root_table, "", "")
-            )
-            statements.append(
-                f"DELETE FROM {staging_table_name} WHERE {root_key_column} NOT IN "
-                f"(SELECT {root_row_key_column} FROM {staging_root_table_name});"
-            )
+        root_key_column = escape_postgres_identifier(
+            MergeThenDeleteJob.get_root_key_col(table_chain, table, "", "")
+        )
+        root_row_key_column = escape_postgres_identifier(
+            MergeThenDeleteJob.get_row_key_col(table_chain, root_table, "", "")
+        )
+        statements.append(
+            f"DELETE FROM {staging_table_name} WHERE {root_key_column} NOT IN "
+            f"(SELECT {root_row_key_column} FROM {staging_root_table_name});"
+        )
     statements.extend(MergeThenDeleteJob.generate_sql(table_chain, sql_client))
     return statements

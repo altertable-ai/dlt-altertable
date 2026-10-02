@@ -130,6 +130,8 @@ uv run --locked ruff format --check .
 uvx ty check src
 ```
 
+Install the Git hooks with `uvx pre-commit install`.
+
 Run HTTP integration tests against [altertable-mock](https://github.com/altertable-ai/altertable-mock):
 
 ```bash
