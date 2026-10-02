@@ -49,7 +49,7 @@ max-complexity = 10
 [tool.pytest.ini_options]
 markers = [
     "integration: requires explicitly enabled local integration checks",
-    "altertable: tests Altertable SQL against a temporary local DuckLake",
+    "ducklake: runs against a temporary local DuckLake",
 ]
 testpaths = ["tests"]
 addopts = ["-v", "--tb=short", "--strict-markers", "-n", "auto", "--dist=worksteal"]

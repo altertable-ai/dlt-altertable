@@ -25,7 +25,7 @@ def events_table():
     }
 
 
-@pytest.mark.altertable
+@pytest.mark.ducklake
 def test_unchanged_partition_hints_do_not_create_snapshots(connection, monkeypatch):
     monkeypatch.setattr(
         "dlt_altertable.table_schema.execute_sql",
@@ -162,7 +162,7 @@ def test_identifiers_are_quoted_as_identifiers():
     assert partition_expressions(table) == ['"score""); DELETE FROM events; --"']
 
 
-@pytest.mark.altertable
+@pytest.mark.ducklake
 @pytest.mark.parametrize(
     ("naming_convention", "column_name"),
     [("direct", 'event"time'), ("snake_case", "eventTime")],

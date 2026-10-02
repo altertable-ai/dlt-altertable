@@ -32,12 +32,8 @@ def partition_keys(keys: object) -> list[PartitionKey]:
         raise TerminalValueError("Altertable partition hints must be a list.")
     normalized: list[PartitionKey] = []
     for key in keys:
-        entry: dict[object, object]
-        if isinstance(key, str):
-            entry = {"column": key}
-        elif isinstance(key, dict) and not set(key) - {"column", "transform", "buckets"}:
-            entry = dict(key)
-        else:
+        entry = {"column": key} if isinstance(key, str) else key
+        if not isinstance(entry, dict) or set(entry) - {"column", "transform", "buckets"}:
             raise TerminalValueError(f"Invalid Altertable partition key: {key!r}.")
         column = entry.get("column")
         if not isinstance(column, str) or not column or "\x00" in column:
@@ -79,26 +75,24 @@ def partition_expressions(table: TTableSchema | PreparedTableSchema) -> list[str
         raise TerminalValueError(
             "Altertable layout hints require append or merge. Replace recreates the table."
         )
-    expressions = []
-    for key in keys:
-        name = key["column"]
-        if name not in table["columns"]:
-            raise TerminalValueError(
-                f"Table {table['name']}: layout column {name!r} does not exist."
-            )
-        column = escape_postgres_identifier(name)
-        transform = key["transform"]
-        data_type = table["columns"][name].get("data_type")
-        if transform in ("year", "month", "day", "hour") and (
-            data_type not in ("date", "timestamp") or (transform == "hour" and data_type == "date")
-        ):
-            raise TerminalValueError(
-                f"Table {table['name']}: {transform} cannot partition {name!r} ({data_type})."
-            )
-        if transform == "identity":
-            expressions.append(column)
-        elif transform == "bucket":
-            expressions.append(f"bucket({key['buckets']}, {column})")
-        else:
-            expressions.append(f"{transform}({column})")
-    return expressions
+    return [_partition_expression(table, key) for key in keys]
+
+
+def _partition_expression(table: TTableSchema | PreparedTableSchema, key: PartitionKey) -> str:
+    name = key["column"]
+    if name not in table["columns"]:
+        raise TerminalValueError(f"Table {table['name']}: layout column {name!r} does not exist.")
+    column = escape_postgres_identifier(name)
+    transform = key["transform"]
+    data_type = table["columns"][name].get("data_type")
+    if transform in ("year", "month", "day", "hour") and (
+        data_type not in ("date", "timestamp") or (transform == "hour" and data_type == "date")
+    ):
+        raise TerminalValueError(
+            f"Table {table['name']}: {transform} cannot partition {name!r} ({data_type})."
+        )
+    if transform == "identity":
+        return column
+    if transform == "bucket":
+        return f"bucket({key['buckets']}, {column})"
+    return f"{transform}({column})"

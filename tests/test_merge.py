@@ -12,7 +12,7 @@ from dlt.pipeline.exceptions import PipelineStepFailed
 
 import dlt_altertable.api
 import dlt_altertable.job_client
-from dlt_altertable import altertable, verify_load
+from dlt_altertable import altertable, altertable_adapter, verify_load
 from dlt_altertable.merge import stage_file
 from dlt_altertable.table_schema import qualified_table_name
 from tests.conftest import DESTINATION_OPTIONS, make_config
@@ -63,6 +63,44 @@ def deals(rows: list[dict[str, Any]], **hints: Any):
         max_table_nesting=3,
         **hints,
     )
+
+
+@pytest.mark.ducklake
+def test_nested_merge_moves_between_partitions_and_deletes_children(
+    local_pipeline, connection, tmp_path
+):
+    def load(rows):
+        return local_pipeline.run(
+            altertable_adapter(
+                deals(rows, columns={"deleted": {"hard_delete": True}}), partition="region"
+            )
+        )
+
+    load(
+        [
+            {"id": 1, "region": "west", "deleted": False, "items": ["old"]},
+            {"id": 2, "region": "north", "deleted": False, "items": ["keep"]},
+        ]
+    )
+    load([{"id": 1, "region": "east", "deleted": False, "items": ["new"]}])
+
+    assert connection.execute(
+        "SELECT id, region FROM lakehouse.raw.deals ORDER BY id"
+    ).fetchall() == [
+        (1, "east"),
+        (2, "north"),
+    ]
+    assert list((tmp_path / "data").rglob("region=east/*.parquet"))
+    assert connection.execute(
+        "SELECT value FROM lakehouse.raw.deals__items ORDER BY value"
+    ).fetchall() == [("keep",), ("new",)]
+
+    load([{"id": 1, "deleted": True}])
+
+    assert connection.execute("SELECT id FROM lakehouse.raw.deals").fetchall() == [(2,)]
+    assert connection.execute("SELECT value FROM lakehouse.raw.deals__items").fetchall() == [
+        ("keep",)
+    ]
 
 
 @pytest.mark.ducklake

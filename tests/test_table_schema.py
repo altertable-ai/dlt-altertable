@@ -3,7 +3,7 @@ import pytest
 from tests.conftest import DESTINATION_OPTIONS, worker_ingest_into
 
 
-@pytest.mark.altertable
+@pytest.mark.ducklake
 @pytest.mark.parametrize(
     ("arrow_types", "values", "stored_type"),
     [
@@ -62,7 +62,7 @@ def test_pipeline_preserves_integer_ranges_across_loads(
     ).fetchall() == [(stored_type,)]
 
 
-@pytest.mark.altertable
+@pytest.mark.ducklake
 def test_pipeline_preserves_nanosecond_timestamps(connection, tmp_path, monkeypatch):
     import dlt
     import pyarrow as pa
@@ -99,7 +99,7 @@ def test_pipeline_preserves_nanosecond_timestamps(connection, tmp_path, monkeypa
     ]
 
 
-@pytest.mark.altertable
+@pytest.mark.ducklake
 def test_uint64_file_widens_a_column_after_the_schema_lookup_is_cached(
     connection, tmp_path, monkeypatch
 ):

@@ -65,7 +65,9 @@ def qualified_table_name(config: AltertableClientConfiguration, table_name: str)
     return f"{qualified_schema_name(config)}.{escape_postgres_identifier(table_name)}"
 
 
-def apply_partitioning(config: AltertableClientConfiguration, table: TTableSchema) -> None:
+def apply_partitioning(
+    config: AltertableClientConfiguration, table: TTableSchema | PreparedTableSchema
+) -> None:
     expressions = partition_expressions(table)
     if expressions is None:
         return
