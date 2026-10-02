@@ -85,6 +85,21 @@ Append and replace commit one file at a time. Replacement recreates the table on
 file, then appends the rest. Retried appends can duplicate rows. Do not set
 `LOAD__PARALLELISM_STRATEGY=parallel`: replacement requires sequential files per table.
 
+## Partitioning and sorting
+
+Layout hints require `append` or `merge`:
+
+```python
+from dlt_altertable import altertable_adapter, altertable_partition
+
+resource = altertable_adapter(
+    contacts(), partition=altertable_partition.bucket(16, "id"), sort="lastmodifieddate"
+)
+pipeline.run(resource)
+```
+
+Pass `partition=[]` or `sort=[]` to reset.
+
 ## Performance
 
 Override defaults with [dlt configuration](https://dlthub.com/docs/reference/performance):
@@ -127,7 +142,7 @@ Use `refresh="drop_resources"` to drop and recreate selected resource tables and
 uv run --locked pytest
 uv run --locked ruff check .
 uv run --locked ruff format --check .
-uvx ty check src
+uv run --locked ty check src tests/test_adapter.py
 ```
 
 Install the Git hooks with `uvx pre-commit install`.

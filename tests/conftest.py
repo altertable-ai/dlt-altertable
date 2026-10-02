@@ -77,6 +77,7 @@ class FakeServer:
     terminal_upload_failure: bool = False
     unauthenticated: bool = False
     query_error: str | None = None
+    sort_keys: list[list[str]] = field(default_factory=list)
 
     def uploads_for(self, table_name: str) -> list[RecordedRequest]:
         return [upload for upload in self.uploads if upload.params["table"] == table_name]
@@ -126,6 +127,10 @@ class FakeServer:
         if "information_schema.tables" in statement:
             landed = {upload.params["table"] for upload in self.uploads}
             return query_response([[t] for t in sorted(landed - set(self.missing_tables))])
+        if "options['metadata_schema']" in statement:
+            return query_response([["main"]])
+        if "ducklake_sort_expression" in statement:
+            return query_response(self.sort_keys)
         if "duckdb_databases" in statement:
             excluded = {"memory"} if "database_name <> 'memory'" in statement else set()
             return query_response(
