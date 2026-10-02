@@ -15,9 +15,17 @@ from dlt.load.utils import get_available_worker_slots
 
 import dlt_altertable.destination
 from dlt_altertable import altertable
+from dlt_altertable.api import execute_sql
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.destination import _upload as sink
-from tests.conftest import BASE_URL, DESTINATION_OPTIONS, FakeServer, make_config
+from tests.conftest import (
+    BASE_URL,
+    DESTINATION_OPTIONS,
+    FakeResponse,
+    FakeServer,
+    make_config,
+    query_response,
+)
 
 ALTERTABLE_ENVIRONMENT = {
     "ALTERTABLE_HOST": "altertable.env",
@@ -447,6 +455,23 @@ def test_query_stream_errors_are_transient(
 
     assert "worker lease expired" in str(failure.value)
     assert server.uploads == []
+
+
+@pytest.mark.parametrize("status", [200, 400, 503])
+def test_long_query_errors_show_the_cause_before_the_sql(monkeypatch, status) -> None:
+    message = "Table deals: nested upsert requires one row per primary key per load."
+    statement = "BEGIN; " + "SELECT 1; " * 300 + "COMMIT;"
+    response = (
+        query_response([{"error": message}]) if status == 200 else FakeResponse(status, message)
+    )
+    monkeypatch.setattr("dlt_altertable.api.session.post", lambda *args, **kwargs: response)
+
+    with pytest.raises((RuntimeError, DestinationTerminalException)) as failure:
+        execute_sql(make_config(), statement)
+
+    detail = str(failure.value)
+    assert message in detail[:200]
+    assert statement in detail
 
 
 @pytest.mark.usefixtures("replaced_tables")
