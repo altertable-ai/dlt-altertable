@@ -69,7 +69,9 @@ Merge requires a non-nullable primary key. In the example, `dedup_sort` keeps th
 `lastmodifieddate` per `id`, comparing incoming and stored rows. `delete-insert`, `insert-only`, `scd2`,
 `merge_key`, `hard_delete`, and ascending `dedup_sort` are unsupported.
 
-New columns are added automatically. Nested objects and lists are stored as JSON strings.
+New columns are added automatically. Nested data defaults to JSON strings. Set
+`altertable(naming_convention="snake_case", max_table_nesting=None)` to flatten objects into columns
+and lists into child tables. Child tables don't support `merge`.
 
 Each file is atomic. A whole load is not. Replacement recreates the table on its first file, then
 appends the rest. Retried appends can duplicate rows. Do not set

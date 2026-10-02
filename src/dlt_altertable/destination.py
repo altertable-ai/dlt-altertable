@@ -135,24 +135,33 @@ def _upload(
 
 
 class altertable(CustomDestination):
-    def __init__(self, destination_name: str = "altertable", **kwargs: Any) -> None:
+    def __init__(
+        self,
+        destination_name: str = "altertable",
+        naming_convention: str = "direct",
+        max_table_nesting: int | None = 0,
+        **kwargs: Any,
+    ) -> None:
         options: dict[str, Any] = {
             "destination_callable": _upload,
-            "naming_convention": "direct",
             "loader_file_format": "parquet",
             "preferred_loader_file_format": "parquet",
             "supported_loader_file_formats": ["parquet"],
             "loader_file_format_selector": None,
             "batch_size": 0,
             "skip_dlt_columns_and_tables": False,
-            "max_table_nesting": 0,
             "loader_parallelism_strategy": "table-sequential",
             "spec": AltertableClientConfiguration,
         }
         for name, value in options.items():
             if name in kwargs and kwargs[name] != value:
                 raise ConfigurationValueError(f"altertable does not support overriding {name}.")
-        super().__init__(destination_name=destination_name, **(kwargs | options))
+        super().__init__(
+            destination_name=destination_name,
+            naming_convention=naming_convention,
+            max_table_nesting=max_table_nesting,
+            **(kwargs | options),
+        )
 
     def _raw_capabilities(self) -> DestinationCapabilitiesContext:
         caps = super()._raw_capabilities()
