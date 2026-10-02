@@ -27,6 +27,7 @@ class AltertableClientConfiguration(CustomDestinationClientConfiguration):
     port: int | None = None
     tls: bool | None = None
     compute_size: str | None = None
+    allow_destructive_refresh: bool = False
 
     def on_resolved(self) -> None:
         for parameter, env_var in ENV_FALLBACKS.items():

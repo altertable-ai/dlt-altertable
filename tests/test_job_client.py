@@ -1,5 +1,6 @@
 import dlt
 import pytest
+from dlt.common.destination.exceptions import DestinationTerminalException
 from dlt.pipeline.exceptions import PipelineStepFailed
 
 import dlt_altertable.api
@@ -95,6 +96,28 @@ def test_drop_storage_executes_only_when_explicitly_requested(server, pipeline):
         client.drop_storage(dry_run=False)
 
     assert server.statements == ['DROP SCHEMA IF EXISTS "lake""house"."raw.schema" CASCADE']
+
+
+@pytest.mark.parametrize("delete_schema", [True, False])
+def test_drop_tables_requires_explicit_opt_in_before_any_query(server, pipeline, delete_schema):
+    with pipeline.destination_client() as client:
+        with pytest.raises(DestinationTerminalException, match="allow_destructive_refresh=True"):
+            client.drop_tables("events", delete_schema=delete_schema)
+
+    assert server.statements == []
+
+
+def test_drop_tables_accepts_the_destination_opt_in(server, tmp_path):
+    pipeline = dlt.pipeline(
+        pipeline_name="refresh",
+        destination=altertable(**DESTINATION_OPTIONS, allow_destructive_refresh=True),
+        pipelines_dir=str(tmp_path),
+    )
+
+    with pipeline.destination_client() as client:
+        client.drop_tables('event"names', delete_schema=False)
+
+    assert server.statements == ['DROP TABLE IF EXISTS "lakehouse"."raw"."event""names"']
 
 
 @pytest.mark.parametrize("unauthenticated", [False, True])

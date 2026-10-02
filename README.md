@@ -104,6 +104,7 @@ Reads buffer results in memory. Use `.arrow()` for Arrow or `.df()` for pandas.
 
 ## Operational notes
 
+Destructive refresh requires `altertable(allow_destructive_refresh=True)`.
 Use `refresh="drop_resources"` to drop and recreate selected resource tables and reset their state.
 
 - Fresh runners restore incremental state with the same pipeline name, catalog, and schema.
