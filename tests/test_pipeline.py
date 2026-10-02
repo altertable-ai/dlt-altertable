@@ -359,24 +359,36 @@ def test_destination_is_configurable_from_the_environment(
 
 def test_standard_layout_hints_survive_pipeline_normalization(server: FakeServer, run_pipeline):
     resource = dlt.resource([{"category": "a", "score": 3}], name="events")
-    resource.apply_hints(columns={"category": {"partition": True}, "score": {"sort": True}})
+    resource.apply_hints(columns={"category": {"partition": True}})
     run_pipeline(resource)
     assert server.alters == [
         'ALTER TABLE "lakehouse"."raw"."events" SET PARTITIONED BY ("category")',
-        'ALTER TABLE "lakehouse"."raw"."events" SET SORTED BY ("score" ASC)',
     ]
 
 
-def test_invalid_layout_prevents_other_tables_from_loading(server: FakeServer, run_pipeline):
+@pytest.mark.parametrize(
+    "hint", ["partition", "sort", "sort_reset", "column_sort", "column_sort_reset"]
+)
+def test_invalid_layout_prevents_other_tables_from_loading(server: FakeServer, run_pipeline, hint):
     valid = dlt.resource([{"value": 1}], name="valid")
     invalid = dlt.resource([{"value": "not a date"}], name="invalid")
-    invalid.apply_hints(
-        additional_table_hints={
-            "x-altertable-partition": [{"column": "value", "transform": "year"}]
-        }
-    )
+    if hint == "partition":
+        invalid.apply_hints(
+            additional_table_hints={
+                "x-altertable-partition": [{"column": "value", "transform": "year"}]
+            }
+        )
+        message = "year cannot partition"
+    else:
+        if hint.startswith("column"):
+            invalid.apply_hints(columns={"value": {"sort": hint == "column_sort"}})
+        else:
+            invalid.apply_hints(
+                additional_table_hints={"x-altertable-sort": ["value"] if hint == "sort" else []}
+            )
+        message = "Sort hints are not supported yet"
 
-    with pytest.raises(PipelineStepFailed, match="year cannot partition"):
+    with pytest.raises(PipelineStepFailed, match=message):
         run_pipeline([valid, invalid])
 
     assert server.uploads == []
@@ -394,7 +406,7 @@ def test_hinted_replace_fails_before_any_table_is_written(server, run_pipeline, 
     if hint == "column":
         replacement.apply_hints(columns={"value": {"partition": True}})
     else:
-        altertable_adapter(replacement, sort=[] if hint == "reset" else "value")
+        altertable_adapter(replacement, partition=[] if hint == "reset" else "value")
 
     with pytest.raises(PipelineStepFailed, match="layout hints require append or merge"):
         run_pipeline([valid, replacement])
@@ -416,13 +428,11 @@ def test_adapter_layout_hints_survive_pipeline_normalization(server: FakeServer,
         altertable_adapter(
             resource,
             partition=["category", altertable_partition.year("event time")],
-            sort=[{"column": "score", "direction": "desc"}, "event time"],
         )
     )
     assert server.alters == [
         'ALTER TABLE "lakehouse"."raw"."events" '
         'SET PARTITIONED BY ("category", year("event time"))',
-        'ALTER TABLE "lakehouse"."raw"."events" SET SORTED BY ("score" DESC, "event time" ASC)',
     ]
     assert server.uploads_for("events")[0].schema.names == [
         "event time",
@@ -445,7 +455,6 @@ def test_adapter_references_follow_pipeline_naming(
     resource = altertable_adapter(
         dlt.resource([{column_name: datetime(2026, 1, 1, tzinfo=UTC)}], name="events"),
         partition=altertable_partition.year(column_name),
-        sort={"column": column_name, "direction": "desc"},
     )
 
     monkeypatch.setenv("SCHEMA__NAMING", naming_convention)
@@ -453,7 +462,6 @@ def test_adapter_references_follow_pipeline_naming(
 
     assert server.alters == [
         'ALTER TABLE "lakehouse"."raw"."events" SET PARTITIONED BY (year("event_time"))',
-        'ALTER TABLE "lakehouse"."raw"."events" SET SORTED BY ("event_time" DESC)',
     ]
 
 
@@ -467,7 +475,7 @@ def test_adapter_preserves_dynamic_column_hints(server: FakeServer, run_pipeline
         table_name=lambda row: f"events_{row['group']}",
         columns=lambda row: column_hints,
     )
-    altertable_adapter(resource, partition="eventTime", sort="eventTime")
+    altertable_adapter(resource, partition="eventTime")
 
     monkeypatch.setenv("SCHEMA__NAMING", "snake_case")
     run_pipeline(resource)

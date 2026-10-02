@@ -6,7 +6,7 @@ import pytest
 from dlt.common.exceptions import TerminalValueError
 
 from dlt_altertable import altertable_partition
-from dlt_altertable.table_schema import create_or_evolve_table, stored_sort_keys
+from dlt_altertable.table_schema import create_or_evolve_table
 from tests.conftest import (
     DESTINATION_OPTIONS,
     FakeServer,
@@ -26,14 +26,13 @@ def events_table():
 
 
 @pytest.mark.altertable
-@pytest.mark.parametrize("connection", ["main", 'layout"metadata'], indirect=True)
-def test_unchanged_sort_hints_do_not_create_snapshots(connection, monkeypatch):
+def test_unchanged_partition_hints_do_not_create_snapshots(connection, monkeypatch):
     monkeypatch.setattr(
         "dlt_altertable.table_schema.execute_sql",
         lambda config, statement: connection.execute(statement).fetchall(),
     )
     table = events_table()
-    table["columns"]["score"]["sort"] = True
+    table["columns"]["category"]["partition"] = True
     config = make_config()
     create_or_evolve_table(config, table)
     snapshot_count = connection.execute("SELECT count(*) FROM lakehouse.snapshots()").fetchone()
@@ -45,12 +44,7 @@ def test_unchanged_sort_hints_do_not_create_snapshots(connection, monkeypatch):
         connection.execute("SELECT count(*) FROM lakehouse.snapshots()").fetchone()
         == snapshot_count
     )
-    table["x-altertable-sort"] = [{"column": "score", "direction": "desc"}]
-    create_or_evolve_table(config, table)
-    assert connection.execute("SELECT count(*) FROM lakehouse.snapshots()").fetchone() == (
-        snapshot_count[0] + 1,
-    )
-    table["x-altertable-sort"] = []
+    table["x-altertable-partition"] = []
     create_or_evolve_table(config, table)
     cleared_count = connection.execute("SELECT count(*) FROM lakehouse.snapshots()").fetchone()
     create_or_evolve_table(config, table)
@@ -59,44 +53,37 @@ def test_unchanged_sort_hints_do_not_create_snapshots(connection, monkeypatch):
     )
 
 
-@pytest.mark.parametrize("metadata_schema", [None, ""])
-def test_sort_lookup_uses_catalog_default_when_metadata_schema_is_unset(
-    monkeypatch, metadata_schema
-):
-    def execute(config, statement):
-        if "duckdb_databases()" in statement:
-            return [[metadata_schema]]
-        assert 'FROM "__ducklake_metadata_lakehouse".ducklake_sort_expression' in statement
-        return []
+@pytest.mark.parametrize("sort", ["score", [], {"column": "score", "direction": "desc"}])
+def test_adapter_rejects_sort_without_modifying_resource(sort):
+    from dlt_altertable import altertable_adapter
 
-    monkeypatch.setattr("dlt_altertable.table_schema.execute_sql", execute)
+    resource = dlt.resource([], name="events")
+    original = resource.compute_table_schema()
 
-    assert stored_sort_keys(make_config(), "events") == []
+    with pytest.raises(TerminalValueError, match="Sort hints are not supported yet"):
+        altertable_adapter(resource, partition="category", sort=sort)
+
+    assert resource.compute_table_schema() == original
 
 
 def test_standard_hints_apply_before_upload_and_change_on_existing_tables(server: FakeServer):
     table = events_table()
     table["columns"]["category"]["partition"] = True
-    table["columns"]["score"]["sort"] = True
     create_or_evolve_table(make_config(), table)
     assert server.alters == [
         'ALTER TABLE "lakehouse"."raw"."events" SET PARTITIONED BY ("category")',
-        'ALTER TABLE "lakehouse"."raw"."events" SET SORTED BY ("score" ASC)',
     ]
     server.existing_columns = list(table["columns"])
-    server.sort_keys = [["score", "ASC"]]
     table["columns"]["category"]["partition"] = False
-    table["columns"]["score"]["sort"] = False
     create_or_evolve_table(make_config(), table)
-    assert server.alters[-2:] == [
+    assert server.alters[-1:] == [
         'ALTER TABLE "lakehouse"."raw"."events" RESET PARTITIONED BY',
-        'ALTER TABLE "lakehouse"."raw"."events" RESET SORTED BY',
     ]
 
 
 def test_adapter_preserves_order_and_serializable_hints():
     from dlt_altertable import altertable_adapter
-    from dlt_altertable.layout import layout_expressions
+    from dlt_altertable.layout import partition_expressions
 
     resource = altertable_adapter(
         dlt.resource([], name="events", columns=events_table()["columns"]),
@@ -105,13 +92,13 @@ def test_adapter_preserves_order_and_serializable_hints():
             altertable_partition.month("event time"),
             altertable_partition.bucket(8, "category"),
         ],
-        sort=[{"column": "score", "direction": "desc"}, "event time"],
     )
     table = json.loads(json.dumps(resource.compute_table_schema()))
-    assert layout_expressions(table) == {
-        "partition": ['year("event time")', 'month("event time")', 'bucket(8, "category")'],
-        "sort": ['"score" DESC', '"event time" ASC'],
-    }
+    assert partition_expressions(table) == [
+        'year("event time")',
+        'month("event time")',
+        'bucket(8, "category")',
+    ]
 
 
 @pytest.mark.parametrize(
@@ -159,20 +146,20 @@ def test_invalid_layout_fails_before_any_query(server: FakeServer, hint, keys):
 
 def test_unhinted_layout_is_preserved_and_explicit_empty_adapter_resets():
     from dlt_altertable import altertable_adapter
-    from dlt_altertable.layout import layout_expressions
+    from dlt_altertable.layout import partition_expressions
 
-    assert layout_expressions(events_table()) == {}
-    resource = altertable_adapter([], partition=[], sort=[])
-    assert layout_expressions(resource.compute_table_schema()) == {"partition": [], "sort": []}
+    assert partition_expressions(events_table()) is None
+    resource = altertable_adapter([], partition=[])
+    assert partition_expressions(resource.compute_table_schema()) == []
 
 
 def test_identifiers_are_quoted_as_identifiers():
-    from dlt_altertable.layout import layout_expressions
+    from dlt_altertable.layout import partition_expressions
 
     table = events_table()
     name = 'score"); DELETE FROM events; --'
-    table["columns"][name] = {"name": name, "data_type": "bigint", "sort": True}
-    assert layout_expressions(table) == {"sort": ['"score""); DELETE FROM events; --" ASC']}
+    table["columns"][name] = {"name": name, "data_type": "bigint", "partition": True}
+    assert partition_expressions(table) == ['"score""); DELETE FROM events; --"']
 
 
 @pytest.mark.altertable
@@ -214,12 +201,11 @@ def test_native_layout_uses_normalized_adapter_references(
             [{column_name: datetime(2026, 1, day, tzinfo=UTC)} for day in (1, 3)], name="events"
         ),
         partition=altertable_partition.year(column_name),
-        sort={"column": column_name, "direction": "desc"},
     )
 
     pipeline.run(resource)
 
     partition_file = next((tmp_path / "data").rglob("*year=2026/*.parquet"))
     assert connection.execute(
-        'SELECT day("event_time") FROM read_parquet(?)', [str(partition_file)]
-    ).fetchall() == [(3,), (1,)]
+        'SELECT day("event_time") FROM read_parquet(?) ORDER BY 1', [str(partition_file)]
+    ).fetchall() == [(1,), (3,)]

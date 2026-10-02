@@ -4,19 +4,16 @@ from dlt.common.data_writers.escape import escape_postgres_identifier
 from dlt.common.destination.client import PreparedTableSchema
 from dlt.common.exceptions import TerminalValueError
 from dlt.common.schema import TTableSchema
-from dlt.common.typing import TSortOrder
 
-type LayoutKind = Literal["partition", "sort"]
 type PartitionTransform = Literal["identity", "year", "month", "day", "hour", "bucket"]
 
-LAYOUT_SETTINGS: dict[LayoutKind, str] = {"partition": "PARTITIONED", "sort": "SORTED"}
+PARTITION_HINT: str = "x-altertable-partition"
 
 
-class LayoutKey(TypedDict):
+class PartitionKey(TypedDict):
     column: str
-    transform: NotRequired[PartitionTransform]
+    transform: PartitionTransform
     buckets: NotRequired[int]
-    direction: NotRequired[TSortOrder]
 
 
 def is_partition_transform(value: object) -> TypeGuard[PartitionTransform]:
@@ -30,96 +27,78 @@ def is_partition_transform(value: object) -> TypeGuard[PartitionTransform]:
     )
 
 
-def is_sort_direction(value: object) -> TypeGuard[TSortOrder]:
-    return isinstance(value, str) and value in ("asc", "desc")
-
-
-def layout_keys(keys: object, kind: LayoutKind) -> list[LayoutKey]:
+def partition_keys(keys: object) -> list[PartitionKey]:
     if not isinstance(keys, list):
-        raise TerminalValueError(f"Altertable {kind} hints must be a list.")
-    normalized: list[LayoutKey] = []
+        raise TerminalValueError("Altertable partition hints must be a list.")
+    normalized: list[PartitionKey] = []
     for key in keys:
-        allowed = (
-            {"column", "transform", "buckets"} if kind == "partition" else {"column", "direction"}
-        )
         entry: dict[object, object]
         if isinstance(key, str):
             entry = {"column": key}
-        elif isinstance(key, dict) and not set(key) - allowed:
+        elif isinstance(key, dict) and not set(key) - {"column", "transform", "buckets"}:
             entry = dict(key)
         else:
-            raise TerminalValueError(f"Invalid Altertable {kind} key: {key!r}.")
+            raise TerminalValueError(f"Invalid Altertable partition key: {key!r}.")
         column = entry.get("column")
         if not isinstance(column, str) or not column or "\x00" in column:
             raise TerminalValueError(f"Invalid Altertable layout column: {column!r}.")
-        item: LayoutKey = {"column": column}
-        if kind == "partition":
-            transform = entry.get("transform", "identity")
-            if not is_partition_transform(transform):
-                raise TerminalValueError(f"Unsupported partition transform: {transform!r}.")
-            item["transform"] = transform
-            buckets = entry.get("buckets")
-            if transform == "bucket":
-                if type(buckets) is not int or not 0 < buckets <= 2**31 - 1:
-                    raise TerminalValueError("Bucket count must be an integer in 1..2147483647.")
-                item["buckets"] = buckets
-            elif "buckets" in entry:
-                raise TerminalValueError("Only bucket transforms accept a bucket count.")
-        else:
-            direction = entry.get("direction", "asc")
-            if not is_sort_direction(direction):
-                raise TerminalValueError(f"Unsupported sort direction: {direction!r}.")
-            item["direction"] = direction
+        transform = entry.get("transform", "identity")
+        if not is_partition_transform(transform):
+            raise TerminalValueError(f"Unsupported partition transform: {transform!r}.")
+        item: PartitionKey = {"column": column, "transform": transform}
+        buckets = entry.get("buckets")
+        if transform == "bucket":
+            if type(buckets) is not int or not 0 < buckets <= 2**31 - 1:
+                raise TerminalValueError("Bucket count must be an integer in 1..2147483647.")
+            item["buckets"] = buckets
+        elif "buckets" in entry:
+            raise TerminalValueError("Only bucket transforms accept a bucket count.")
         if item in normalized:
-            raise TerminalValueError(f"Duplicate Altertable {kind} key: {key!r}.")
+            raise TerminalValueError(f"Duplicate Altertable partition key: {key!r}.")
         normalized.append(item)
     return normalized
 
 
-def layout_expressions(table: TTableSchema | PreparedTableSchema) -> dict[LayoutKind, list[str]]:
-    layouts: dict[LayoutKind, list[str]] = {}
-    for kind in LAYOUT_SETTINGS:
-        hint = f"x-altertable-{kind}"
-        if hint in table:
-            keys = layout_keys(table.get(hint), kind)
-        elif any(kind in column for column in table["columns"].values()):
-            for column in table["columns"].values():
-                if kind in column and type(column[kind]) is not bool:
-                    raise TerminalValueError(f"Standard {kind} column hints must be bool.")
-            keys = layout_keys(
-                [name for name, column in table["columns"].items() if column.get(kind)], kind
-            )
-        else:
-            continue
-        expressions = []
-        for key in keys:
-            name = key["column"]
-            if name not in table["columns"]:
-                raise TerminalValueError(
-                    f"Table {table['name']}: layout column {name!r} does not exist."
-                )
-            column = escape_postgres_identifier(name)
-            if kind == "sort":
-                expressions.append(f"{column} {key['direction'].upper()}")
-                continue
-            transform = key["transform"]
-            data_type = table["columns"][name].get("data_type")
-            if transform in ("year", "month", "day", "hour") and (
-                data_type not in ("date", "timestamp")
-                or (transform == "hour" and data_type == "date")
-            ):
-                raise TerminalValueError(
-                    f"Table {table['name']}: {transform} cannot partition {name!r} ({data_type})."
-                )
-            if transform == "identity":
-                expressions.append(column)
-            elif transform == "bucket":
-                expressions.append(f"bucket({key['buckets']}, {column})")
-            else:
-                expressions.append(f"{transform}({column})")
-        layouts[kind] = expressions
-    if layouts and table.get("write_disposition") == "replace":
-        raise TerminalValueError(
-            "Altertable layout hints require append or merge; replace recreates the table."
+def partition_expressions(table: TTableSchema | PreparedTableSchema) -> list[str] | None:
+    if "x-altertable-sort" in table or any(
+        "sort" in column for column in table["columns"].values()
+    ):
+        raise TerminalValueError("Sort hints are not supported yet.")
+    if PARTITION_HINT in table:
+        keys = partition_keys(table.get(PARTITION_HINT))
+    elif any("partition" in column for column in table["columns"].values()):
+        for column in table["columns"].values():
+            if "partition" in column and type(column["partition"]) is not bool:
+                raise TerminalValueError("Standard partition column hints must be bool.")
+        keys = partition_keys(
+            [name for name, column in table["columns"].items() if column.get("partition")]
         )
-    return layouts
+    else:
+        return None
+    if table.get("write_disposition") == "replace":
+        raise TerminalValueError(
+            "Altertable layout hints require append or merge. Replace recreates the table."
+        )
+    expressions = []
+    for key in keys:
+        name = key["column"]
+        if name not in table["columns"]:
+            raise TerminalValueError(
+                f"Table {table['name']}: layout column {name!r} does not exist."
+            )
+        column = escape_postgres_identifier(name)
+        transform = key["transform"]
+        data_type = table["columns"][name].get("data_type")
+        if transform in ("year", "month", "day", "hour") and (
+            data_type not in ("date", "timestamp") or (transform == "hour" and data_type == "date")
+        ):
+            raise TerminalValueError(
+                f"Table {table['name']}: {transform} cannot partition {name!r} ({data_type})."
+            )
+        if transform == "identity":
+            expressions.append(column)
+        elif transform == "bucket":
+            expressions.append(f"bucket({key['buckets']}, {column})")
+        else:
+            expressions.append(f"{transform}({column})")
+    return expressions

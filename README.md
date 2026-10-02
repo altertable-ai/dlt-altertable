@@ -85,20 +85,18 @@ Append and replace commit one file at a time. Replacement recreates the table on
 file, then appends the rest. Retried appends can duplicate rows. Do not set
 `LOAD__PARALLELISM_STRATEGY=parallel`: replacement requires sequential files per table.
 
-## Partitioning and sorting
+## Partitioning
 
-Layout hints require `append` or `merge`:
+Partition hints require `append` or `merge`:
 
 ```python
 from dlt_altertable import altertable_adapter, altertable_partition
 
-resource = altertable_adapter(
-    contacts(), partition=altertable_partition.bucket(16, "id"), sort="lastmodifieddate"
-)
+resource = altertable_adapter(contacts(), partition=altertable_partition.bucket(16, "id"))
 pipeline.run(resource)
 ```
 
-Pass `partition=[]` or `sort=[]` to reset.
+Pass `partition=[]` to reset. Sort hints are not supported yet.
 
 ## Performance
 
@@ -142,7 +140,7 @@ Use `refresh="drop_resources"` to drop and recreate selected resource tables and
 uv run --locked pytest
 uv run --locked ruff check .
 uv run --locked ruff format --check .
-uv run --locked ty check src tests/test_adapter.py
+uvx ty check src
 ```
 
 Install the Git hooks with `uvx pre-commit install`.

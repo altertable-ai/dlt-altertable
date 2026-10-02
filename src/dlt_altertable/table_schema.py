@@ -12,14 +12,13 @@ from dlt.common.destination.capabilities import DestinationCapabilitiesContext
 from dlt.common.destination.client import PreparedTableSchema
 from dlt.common.exceptions import TerminalValueError
 from dlt.common.libs.pyarrow import normalize_py_arrow_item
-from dlt.common.libs.sqlglot import sqlglot
 from dlt.common.normalizers.naming.direct import NamingConvention
 from dlt.common.schema import TTableSchema
 from dlt.common.schema.typing import TColumnSchema
 
 from dlt_altertable.api import execute_sql
 from dlt_altertable.configuration import AltertableClientConfiguration
-from dlt_altertable.layout import LAYOUT_SETTINGS, layout_expressions
+from dlt_altertable.layout import partition_expressions
 
 SQL_TYPES = {
     "text": "VARCHAR",
@@ -66,47 +65,16 @@ def qualified_table_name(config: AltertableClientConfiguration, table_name: str)
     return f"{qualified_schema_name(config)}.{escape_postgres_identifier(table_name)}"
 
 
-def stored_sort_keys(config: AltertableClientConfiguration, table_name: str) -> list[str]:
-    metadata_schema = execute_sql(
-        config,
-        "SELECT options['metadata_schema'] FROM duckdb_databases() "
-        f"WHERE database_name = {escape_duckdb_literal(config.catalog)}",
-    )[0][0]
-    metadata = ".".join(
-        escape_postgres_identifier(part)
-        for part in (f"__ducklake_metadata_{config.catalog}", metadata_schema)
-        if part
+def apply_partitioning(config: AltertableClientConfiguration, table: TTableSchema) -> None:
+    expressions = partition_expressions(table)
+    if expressions is None:
+        return
+    clause = (
+        f"SET PARTITIONED BY ({', '.join(expressions)})" if expressions else "RESET PARTITIONED BY"
     )
-    rows = execute_sql(
-        config,
-        "SELECT e.expression, e.sort_direction "
-        f"FROM {metadata}.ducklake_sort_expression e "
-        f"JOIN {metadata}.ducklake_sort_info i USING (sort_id, table_id) "
-        f"JOIN {metadata}.ducklake_table t USING (table_id) "
-        f"JOIN {metadata}.ducklake_schema s USING (schema_id) "
-        f"WHERE s.schema_name = {escape_duckdb_literal(config.dataset_name)} "
-        f"AND t.table_name = {escape_duckdb_literal(table_name)} "
-        "AND s.end_snapshot IS NULL AND t.end_snapshot IS NULL AND i.end_snapshot IS NULL "
-        "ORDER BY e.sort_key_index",
+    execute_sql(
+        config, f"ALTER TABLE {qualified_table_name(config, cast(str, table['name']))} {clause}"
     )
-    return [
-        f"{sqlglot.parse_one(expression, read='duckdb').sql(dialect='duckdb', identify=True)} "
-        f"{direction}"
-        for expression, direction in rows
-    ]
-
-
-def apply_layout(config: AltertableClientConfiguration, table: TTableSchema) -> None:
-    table_name = cast(str, table["name"])
-    for kind, expressions in layout_expressions(table).items():
-        if kind == "sort" and expressions == stored_sort_keys(config, table_name):
-            continue
-        clause = (
-            f"SET {LAYOUT_SETTINGS[kind]} BY ({', '.join(expressions)})"
-            if expressions
-            else f"RESET {LAYOUT_SETTINGS[kind]} BY"
-        )
-        execute_sql(config, f"ALTER TABLE {qualified_table_name(config, table_name)} {clause}")
 
 
 def create_table(
@@ -127,7 +95,7 @@ def create_table(
         config,
         f"CREATE TABLE IF NOT EXISTS {qualified_table_name(config, table_name)} ({columns})",
     )
-    apply_layout(config, table)
+    apply_partitioning(config, table)
     logger.info(
         f"Created table {config.catalog}.{config.dataset_name}.{table_name} "
         f"with {len(table['columns'])} columns"
@@ -150,7 +118,7 @@ def create_or_evolve_table(
         for field in parquet_schema:
             if field.name in column_types and pa.types.is_uint64(field.type):
                 column_types[field.name] = "DECIMAL(20,0)"
-    layout_expressions(table)
+    partition_expressions(table)
     table_name = cast(str, table["name"])
     rows = execute_sql(
         config,
@@ -179,7 +147,7 @@ def create_or_evolve_table(
                 f"ALTER TABLE {qualified_table_name(config, table_name)} "
                 f"ALTER COLUMN {escape_postgres_identifier(name)} TYPE DECIMAL(20,0)",
             )
-    apply_layout(config, table)
+    apply_partitioning(config, table)
     return True
 
 

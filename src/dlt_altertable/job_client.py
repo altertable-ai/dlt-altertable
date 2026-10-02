@@ -29,7 +29,7 @@ from dlt.destinations.utils import verify_schema_merge_disposition
 from dlt_altertable.api import execute_sql
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.destination import upsert_params
-from dlt_altertable.layout import LAYOUT_SETTINGS, layout_expressions, layout_keys
+from dlt_altertable.layout import PARTITION_HINT, partition_expressions, partition_keys
 from dlt_altertable.merge import (
     MergeThenDeleteJob,
     completed_staging_tables,
@@ -52,13 +52,11 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
     @override
     def prepare_load_table(self, table_name: str) -> PreparedTableSchema:
         table = super().prepare_load_table(table_name)
-        for kind in LAYOUT_SETTINGS:
-            hint = f"x-altertable-{kind}"
-            if hint in table:
-                keys = layout_keys(table.get(hint), kind)
-                for key in keys:
-                    key["column"] = self.schema.naming.normalize_identifier(key["column"])
-                table.update({hint: keys})
+        if PARTITION_HINT in table:
+            keys = partition_keys(table.get(PARTITION_HINT))
+            for key in keys:
+                key["column"] = self.schema.naming.normalize_identifier(key["column"])
+            table.update({PARTITION_HINT: keys})
         return table
 
     @override
@@ -79,7 +77,7 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                 upsert_params(cast(TTableSchema, table))
             for column in table["columns"].values():
                 sql_type(column)
-            layout_expressions(table)
+            partition_expressions(table)
         if validation_errors := verify_schema_merge_disposition(
             self.schema, tables, self.capabilities
         ):
