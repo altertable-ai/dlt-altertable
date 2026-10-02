@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import copy
 from hashlib import sha256
 from typing import cast, override
@@ -68,15 +68,17 @@ def staging_config(
     return staged
 
 
-def staged_files() -> dict[str, dict[str, bool]]:
+def staged_uploads() -> dict[str, dict[str, bool]]:
     return destination_state().setdefault("staged_files", {})
 
 
-def completed_staged_files() -> dict[str, list[str]]:
-    files = staged_files()
-    if not all(uploaded for shards in files.values() for uploaded in shards.values()):
+def completed_staging_tables() -> dict[str, list[str]]:
+    uploads = staged_uploads()
+    if not all(
+        uploaded for table_uploads in uploads.values() for uploaded in table_uploads.values()
+    ):
         raise DestinationTerminalException("Cannot merge a load with incomplete staging uploads.")
-    return {table_name: list(shards) for table_name, shards in files.items()}
+    return {table_name: list(table_uploads) for table_name, table_uploads in uploads.items()}
 
 
 def stage_file(config: AltertableClientConfiguration, path: object, table: TTableSchema) -> None:
@@ -84,9 +86,9 @@ def stage_file(config: AltertableClientConfiguration, path: object, table: TTabl
         raise TerminalValueError("Staged merges require a Parquet file path.")
     staged = staging_config(config, load_package_state()["load_id"])
     file_id = ParsedLoadJobFileName.parse(path).job_id()
-    table_name = "_dlt_file_" + sha256(file_id.encode()).hexdigest()[:32]
-    files = staged_files().setdefault(cast(str, table["name"]), {})
-    files[table_name] = False
+    staging_table_name = "_dlt_file_" + sha256(file_id.encode()).hexdigest()[:32]
+    table_uploads = staged_uploads().setdefault(cast(str, table["name"]), {})
+    table_uploads[staging_table_name] = False
     commit_load_package_state()
     create_or_evolve_table(config, table, pq.read_schema(path))
     api.execute_sql(config, f"CREATE SCHEMA IF NOT EXISTS {qualified_schema_name(staged)}")
@@ -97,76 +99,82 @@ def stage_file(config: AltertableClientConfiguration, path: object, table: TTabl
             {
                 "catalog": cast(str, staged.catalog),
                 "schema": cast(str, staged.dataset_name),
-                "table": table_name,
+                "table": staging_table_name,
                 "mode": "overwrite",
             },
             aligned_path,
             f"stage {table['name']}",
         )
-    files[table_name] = True
+    table_uploads[staging_table_name] = True
 
 
 def merge_statements(
     table_chain: Sequence[PreparedTableSchema],
     sql_client: AltertableSqlClient,
-    files: dict[str, list[str]],
+    staging_tables: Mapping[str, Sequence[str]],
 ) -> list[str]:
     statements: list[str] = []
-    root = table_chain[0]
-    # dlt types its read-only column-hint helpers against the unprepared schema.
-    root_schema = cast(TTableSchema, root)
-    _, root_stage = sql_client.get_qualified_table_names(cast(str, root["name"]))
-    keys = get_columns_names_with_prop(root_schema, "primary_key")
-    quoted_keys = [escape_postgres_identifier(key) for key in keys]
-    key_list = ", ".join(quoted_keys)
-    dedup_sort = get_dedup_sort_tuple(root_schema)
-    cursor = escape_postgres_identifier(dedup_sort[0]) if dedup_sort else None
+    root_table = table_chain[0]
+    root_table_name = cast(str, root_table["name"])
+    column_hints: TTableSchema = {"columns": root_table["columns"]}
+    _, staging_root_table_name = sql_client.get_qualified_table_names(root_table_name)
+    primary_keys = [
+        escape_postgres_identifier(key)
+        for key in get_columns_names_with_prop(column_hints, "primary_key")
+    ]
+    primary_key_sql = ", ".join(primary_keys)
+    dedup_sort = get_dedup_sort_tuple(column_hints)
+    cursor_column = escape_postgres_identifier(dedup_sort[0]) if dedup_sort else None
+    has_nested_tables = len(table_chain) > 1
     for table in table_chain:
         table_name = cast(str, table["name"])
-        target, staging = sql_client.get_qualified_table_names(table_name)
-        sources = files.get(table_name, [])
+        target_table_name, staging_table_name = sql_client.get_qualified_table_names(table_name)
+        is_root_table = table_name == root_table_name
         source_sql = (
             " UNION ALL BY NAME ".join(
-                f"SELECT * FROM {sql_client.get_qualified_table_names(name)[1]}" for name in sources
+                f"SELECT * FROM {sql_client.get_qualified_table_names(name)[1]}"
+                for name in staging_tables.get(table_name, ())
             )
-            or f"SELECT * FROM {target} WHERE FALSE"
+            or f"SELECT * FROM {target_table_name} WHERE FALSE"
         )
-        if table == root and len(table_chain) == 1:
-            order = f"{cursor} DESC NULLS LAST" if cursor else key_list
+        if is_root_table and not has_nested_tables:
+            order = f"{cursor_column} DESC NULLS LAST" if cursor_column else primary_key_sql
             source_sql = (
                 f"SELECT * FROM ({source_sql}) "
-                f"QUALIFY row_number() OVER (PARTITION BY {key_list} ORDER BY {order}) = 1"
+                f"QUALIFY row_number() OVER (PARTITION BY {primary_key_sql} ORDER BY {order}) = 1"
             )
-        statements.append(f"CREATE OR REPLACE TABLE {staging} AS {source_sql};")
-        if table == root:
-            if len(table_chain) > 1:
+        statements.append(f"CREATE OR REPLACE TABLE {staging_table_name} AS {source_sql};")
+        if is_root_table:
+            if has_nested_tables:
                 message = escape_duckdb_literal(
-                    f"Table {root['name']}: nested upsert requires "
+                    f"Table {root_table_name}: nested upsert requires "
                     "one row per primary key per load."
                 )
                 statements.append(
-                    f"SELECT CASE WHEN count(*) = count(DISTINCT row({key_list})) "
-                    f"THEN TRUE ELSE error({message}) END FROM {staging};"
+                    f"SELECT CASE WHEN count(*) = count(DISTINCT row({primary_key_sql})) "
+                    f"THEN TRUE ELSE error({message}) END FROM {staging_table_name};"
                 )
-            if cursor:
-                matching = " AND ".join(f"s.{key} = d.{key}" for key in quoted_keys)
-                newer = (
-                    f"(s.{cursor} > d.{cursor} OR (d.{cursor} IS NULL AND s.{cursor} IS NOT NULL))"
+            if cursor_column:
+                primary_key_match = " AND ".join(f"s.{key} = d.{key}" for key in primary_keys)
+                incoming_is_newer = (
+                    f"(s.{cursor_column} > d.{cursor_column} "
+                    f"OR (d.{cursor_column} IS NULL AND s.{cursor_column} IS NOT NULL))"
                 )
                 statements.append(
-                    f"DELETE FROM {staging} AS s WHERE EXISTS (SELECT 1 FROM {target} AS d "
-                    f"WHERE {matching} AND NOT ({newer} IS TRUE));"
+                    f"DELETE FROM {staging_table_name} AS s WHERE EXISTS "
+                    f"(SELECT 1 FROM {target_table_name} AS d "
+                    f"WHERE {primary_key_match} AND NOT ({incoming_is_newer} IS TRUE));"
                 )
         else:
-            root_key = escape_postgres_identifier(
+            root_key_column = escape_postgres_identifier(
                 MergeThenDeleteJob.get_root_key_col(table_chain, table, "", "")
             )
-            root_id = escape_postgres_identifier(
-                MergeThenDeleteJob.get_row_key_col(table_chain, root, "", "")
+            root_row_key_column = escape_postgres_identifier(
+                MergeThenDeleteJob.get_row_key_col(table_chain, root_table, "", "")
             )
             statements.append(
-                f"DELETE FROM {staging} WHERE {root_key} NOT IN "
-                f"(SELECT {root_id} FROM {root_stage});"
+                f"DELETE FROM {staging_table_name} WHERE {root_key_column} NOT IN "
+                f"(SELECT {root_row_key_column} FROM {staging_root_table_name});"
             )
     statements.extend(MergeThenDeleteJob.generate_sql(table_chain, sql_client))
     return statements

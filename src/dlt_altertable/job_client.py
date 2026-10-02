@@ -31,7 +31,7 @@ from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.destination import upsert_params
 from dlt_altertable.merge import (
     MergeThenDeleteJob,
-    completed_staged_files,
+    completed_staging_tables,
     merge_statements,
     stage_file,
     staging_config,
@@ -66,8 +66,10 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                 upsert_params(cast(TTableSchema, table))
             for column in table["columns"].values():
                 sql_type(column)
-        if exceptions := verify_schema_merge_disposition(self.schema, tables, self.capabilities):
-            raise exceptions[0]
+        if validation_errors := verify_schema_merge_disposition(
+            self.schema, tables, self.capabilities
+        ):
+            raise validation_errors[0]
         return tables
 
     def _requires_staging(self, table_name: str) -> bool:
@@ -156,7 +158,7 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
     ) -> TSchemaTables | None:
         update = super().update_stored_schema(only_tables or (), expected_update or {}, force)
         if self.get_stored_schema_by_hash(self.schema.stored_version_hash) is None:
-            self._insert(
+            schema_insert_sql = self._insert_statement(
                 self.schema.version_table_name,
                 {
                     "version_hash": self.schema.stored_version_hash,
@@ -167,10 +169,8 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                     "schema": json.dumps(self.schema.to_dict()),
                 },
             )
+            execute_sql(self.config, schema_insert_sql)
         return update
-
-    def _insert(self, table_name: str, values: Mapping[str, object]) -> None:
-        execute_sql(self.config, self._insert_statement(table_name, values))
 
     def _insert_statement(self, table_name: str, values: Mapping[str, object]) -> str:
         columns = ", ".join(escape_postgres_identifier(column) for column in values)
@@ -192,8 +192,8 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                 "schema_version_hash": self.schema.stored_version_hash,
             },
         )
-        files = completed_staged_files()
-        if not files:
+        staging_tables = completed_staging_tables()
+        if not staging_tables:
             execute_sql(self.config, load_receipt_sql)
             return
         staged = staging_config(self.config, load_id)
@@ -207,12 +207,15 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
         if not load_committed:
             self.sql_client.staging_dataset_name = cast(str, staged.dataset_name)
             statements = ["BEGIN TRANSACTION;"]
-            roots = {cast(str, get_root_table(self.schema.tables, name)["name"]) for name in files}
+            roots = {
+                cast(str, get_root_table(self.schema.tables, name)["name"])
+                for name in staging_tables
+            }
             for root in sorted(roots):
                 chain = self._table_chain(root)
                 for table in chain:
                     create_or_evolve_table(self.config, table)
-                statements.extend(merge_statements(chain, self.sql_client, files))
+                statements.extend(merge_statements(chain, self.sql_client, staging_tables))
             statements.extend([f"{load_receipt_sql};", "COMMIT;"])
             execute_sql(self.config, "\n".join(statements))
         execute_sql(self.config, f"DROP SCHEMA IF EXISTS {qualified_schema_name(staged)} CASCADE")
