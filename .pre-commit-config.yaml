@@ -1,0 +1,11 @@
+minimum_pre_commit_version: "4.4.0"
+files: '(\.pyi?$|^pyproject\.toml$|^uv\.lock$|^\.pre-commit-config\.yaml$)'
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: Ruff check
+        entry: uv run --locked ruff check .
+        language: unsupported
+        pass_filenames: false

@@ -43,7 +43,7 @@ session.mount("https://", _adapter)
 def raise_for_failure(response: requests.Response, action: str) -> None:
     if response.status_code == HTTPStatus.OK:
         return
-    detail = f"{action} failed with HTTP {response.status_code}: {response.text.strip()[:2000]}"
+    detail = f"HTTP {response.status_code}: {response.text.strip()[:2000]}\nOperation: {action}"
     if response.status_code in TERMINAL_STATUSES:
         raise DestinationTerminalException(detail)
     raise RuntimeError(detail)
@@ -76,7 +76,7 @@ def execute_sql(config: AltertableClientConfiguration, statement: str) -> list[l
     payload = [json.loads(line) for line in response.text.splitlines() if line.strip()]
     for entry in payload:
         if isinstance(entry, dict) and "error" in entry:
-            raise RuntimeError(f"query {statement!r} failed mid-stream: {entry['error']}")
+            raise RuntimeError(f"Query failed mid-stream: {entry['error']}\nSQL: {statement}")
     if (
         len(payload) < 2
         or not isinstance(payload[0], dict)

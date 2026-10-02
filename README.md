@@ -63,18 +63,26 @@ pipeline.run(contacts())
 | --- | --- |
 | `append` | Adds rows. |
 | `replace` | Recreates the table, then appends subsequent files. |
-| `merge` | Upserts by `primary_key`. Omitted columns keep their values. |
+| `merge` | Upserts by `primary_key`; supports child tables and `hard_delete`. |
 
 Merge requires a non-nullable primary key. In the example, `dedup_sort` keeps the highest
 `lastmodifieddate` per `id`, comparing incoming and stored rows. `delete-insert`, `insert-only`, `scd2`,
-`merge_key`, `hard_delete`, and ascending `dedup_sort` are unsupported.
+`merge_key`, and ascending `dedup_sort` are unsupported.
 
-New columns are added automatically. Nested data defaults to JSON strings. Set
+New columns are added automatically. Nested data defaults to JSON strings (`max_table_nesting=0`). Set
 `altertable(naming_convention="snake_case", max_table_nesting=None)` to flatten objects into columns
-and lists into child tables. Child tables don't support `merge`.
+and lists into child tables.
 
-Each file is atomic. A whole load is not. Replacement recreates the table on its first file, then
-appends the rest. Retried appends can duplicate rows. Do not set
+Nested merges replace children and require one root per primary key per load.
+With child tables or `hard_delete`, send complete records when inserting or updating:
+omitted fields become null and omitted lists are cleared.
+Flat merges without `hard_delete` preserve columns absent from incoming files.
+
+Use `columns={"deleted": {"hard_delete": True}}` to delete records and their children
+([dlt deletion rules](https://dlthub.com/docs/general-usage/merge-loading#delete-records)).
+
+Append and replace commit one file at a time. Replacement recreates the table on its first
+file, then appends the rest. Retried appends can duplicate rows. Do not set
 `LOAD__PARALLELISM_STRATEGY=parallel`: replacement requires sequential files per table.
 
 ## Performance
@@ -121,6 +129,8 @@ uv run --locked ruff check .
 uv run --locked ruff format --check .
 uvx ty check src
 ```
+
+Install the Git hooks with `uvx pre-commit install`.
 
 Run HTTP integration tests against [altertable-mock](https://github.com/altertable-ai/altertable-mock):
 

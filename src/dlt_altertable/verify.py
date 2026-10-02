@@ -4,9 +4,16 @@ import dlt
 from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
 from dlt.common.destination.reference import AnyDestination_CO
 from dlt.common.pipeline import LoadInfo, NormalizeInfo
-from dlt.common.schema import TTableSchema
+from dlt.common.schema import TSchemaTables, TTableSchema
 from dlt.common.schema.typing import C_DLT_LOAD_ID, TWriteDisposition
-from dlt.common.schema.utils import DEFAULT_WRITE_DISPOSITION, get_dedup_sort_tuple
+from dlt.common.schema.utils import (
+    DEFAULT_WRITE_DISPOSITION,
+    fill_hints_from_parent_and_clone_table,
+    get_columns_names_with_prop,
+    get_dedup_sort_tuple,
+    get_first_column_name_with_prop,
+    has_column_with_prop,
+)
 from dlt.common.utils import merge_row_counts
 
 from dlt_altertable.api import execute_sql
@@ -75,7 +82,11 @@ def tables_in_load(load_info: LoadInfo) -> dict[str, list[TTableSchema]]:
     for package in load_info.load_packages:
         names = {job.job_file_info.table_name for jobs in package.jobs.values() for job in jobs}
         for name in names:
-            table_definitions_by_name.setdefault(name, []).append(package.schema.tables[name])
+            table_definitions_by_name.setdefault(name, []).append(
+                fill_hints_from_parent_and_clone_table(
+                    package.schema.tables, package.schema.tables[name]
+                )
+            )
     return table_definitions_by_name
 
 
@@ -123,8 +134,37 @@ def table_contract(
     table = table_definitions[0]
     disposition = table.get("write_disposition") or DEFAULT_WRITE_DISPOSITION
     key_columns = primary_key_columns(table) if disposition in (MERGE, REPLACE) else []
-    upsert_skips_stale_rows = disposition == MERGE and bool(get_dedup_sort_tuple(table))
+    if table.get("parent") and disposition in (MERGE, REPLACE):
+        key_columns = get_columns_names_with_prop(table, "row_key")
+    upsert_skips_stale_rows = disposition == MERGE and bool(
+        get_dedup_sort_tuple(table)
+        or has_column_with_prop(table, "hard_delete")
+        or table.get("parent")
+    )
     return disposition, key_columns, upsert_skips_stale_rows
+
+
+def table_load_predicate(
+    config: AltertableClientConfiguration,
+    table: TTableSchema,
+    tables: TSchemaTables,
+    load_id_predicate: str,
+) -> str | None:
+    if C_DLT_LOAD_ID in table["columns"]:
+        return load_id_predicate
+    if not (parent_name := table.get("parent")):
+        return None
+    parent = tables[parent_name]
+    parent_key = get_first_column_name_with_prop(table, "parent_key")
+    row_key = get_first_column_name_with_prop(parent, "row_key")
+    predicate = table_load_predicate(config, parent, tables, load_id_predicate)
+    if not parent_key or not row_key or not predicate:
+        return None
+    return (
+        f"{escape_postgres_identifier(parent_key)} IN "
+        f"(SELECT {escape_postgres_identifier(row_key)} "
+        f"FROM {qualified_table_name(config, parent_name)} WHERE {predicate})"
+    )
 
 
 def count_query(
@@ -189,7 +229,7 @@ def verify_table(
     table_name: str,
     table_definitions: list[TTableSchema],
     normalized_rows: int | None,
-    load_id_predicate: str,
+    load_id_predicate: str | None,
 ) -> list[str]:
     contract = table_contract(table_definitions)
     if contract is None:
@@ -200,7 +240,7 @@ def verify_table(
         return [f"{table_name}: the load includes this table, but it does not exist"]
 
     disposition, key_columns, upsert_skips_stale_rows = contract
-    if disposition != REPLACE and C_DLT_LOAD_ID not in table_definitions[0]["columns"]:
+    if disposition != REPLACE and load_id_predicate is None:
         return [
             f"{table_name}: this table has no _dlt_load_id column, so this load cannot be "
             "reconciled. For Arrow inputs, enable NORMALIZE__PARQUET_NORMALIZER__ADD_DLT_LOAD_ID "
@@ -215,7 +255,7 @@ def verify_table(
         if not key_columns:
             return problems
     query = count_query(
-        qualified_table_name(config, table_name), disposition, key_columns, load_id_predicate
+        qualified_table_name(config, table_name), disposition, key_columns, load_id_predicate or ""
     )
     lakehouse_counts = execute_sql(config, query)[0]
     problems.extend(
@@ -235,6 +275,11 @@ def verify_load(pipeline: dlt.Pipeline) -> list[str]:
     """Reads the last load back and reports missing rows, tables, or primary-key integrity."""
     load_info, normalized_row_counts, config = load_context(pipeline)
     table_definitions_by_name = tables_in_load(load_info)
+    schema_tables: TSchemaTables = {
+        name: table
+        for package in load_info.load_packages
+        for name, table in package.schema.tables.items()
+    }
     load_id_literals = ", ".join(escape_duckdb_literal(load_id) for load_id in load_info.loads_ids)
     load_id_predicate = f"{escape_postgres_identifier(C_DLT_LOAD_ID)} IN ({load_id_literals})"
 
@@ -251,7 +296,9 @@ def verify_load(pipeline: dlt.Pipeline) -> list[str]:
                 table_name,
                 table_definitions,
                 normalized_rows,
-                load_id_predicate,
+                table_load_predicate(
+                    config, schema_tables[table_name], schema_tables, load_id_predicate
+                ),
             )
         )
     return problems
