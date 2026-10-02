@@ -79,36 +79,20 @@ Uploads default to one concurrent load job, including across tables, to reduce D
 commit conflicts. Parquet files rotate at approximately 128 MiB to bound individual upload retries.
 Rotation happens after a buffer or Arrow batch is written; it is not a hard upload or memory limit.
 
-## Performance and overrides
+## Performance
 
-Use dlt's [native configuration](https://dlthub.com/docs/reference/performance) instead of patching
-the upload client. Environment settings override the destination's file-size recommendation:
+Override defaults with [dlt configuration](https://dlthub.com/docs/reference/performance):
 
 ```bash
 export DATA_WRITER__FILE_MAX_BYTES=268435456  # 256 MiB; 0 disables byte-based rotation
-export DATA_WRITER__COMPRESSION=zstd        # opt in when transfer size is the bottleneck
+export DATA_WRITER__COMPRESSION=zstd
 export PROGRESS=log
 export PYTHONUNBUFFERED=1
 ```
 
-`DATA_WRITER__FILE_MAX_ITEMS` adds a row-count threshold. These writer settings apply to extraction
-and normalization; use `EXTRACT__DATA_WRITER__...` or `NORMALIZE__DATA_WRITER__...` to tune one stage.
-The default buffer remains 5,000 rows and compression remains Snappy. Larger buffers retain more
-data per active writer, so measure peak memory before increasing `DATA_WRITER__BUFFER_MAX_ITEMS`.
-
-Agents can also pass native destination capabilities explicitly:
-
-```python
-destination = altertable(recommended_file_size=256 * 1024**2, max_parallel_load_jobs=2)
-```
-
-Only increase concurrent loads after measuring catalog contention. `LOAD__WORKERS` also limits
-concurrency, so both limits must allow it. Backend tasks retain their separate single-worker limit.
-
-Tune the stage reported by progress logs. Slow extraction needs source batching and rate-limit tuning;
-load workers cannot speed it up. Typed Arrow inputs can avoid JSON normalization.
-File rotation does not checkpoint source state. Large backfills need bounded, complete `pipeline.run()`
-cycles with durable, correctly ordered resume positions and enough time left to load.
+`altertable(max_parallel_load_jobs=2)` allows parallel uploads, subject to `LOAD__WORKERS`.
+Measure catalog contention before increasing either; backend tasks enforce one load worker.
+File rotation does not checkpoint incremental state.
 
 ## Read and verify
 
