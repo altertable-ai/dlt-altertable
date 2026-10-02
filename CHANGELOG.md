@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.1.6](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.5...dlt-altertable-v0.1.6) (2026-10-02)
+
+
+### Features
+
+* configure dlt naming and nesting ([#26](https://github.com/altertable-ai/dlt-altertable/issues/26)) ([37a4430](https://github.com/altertable-ai/dlt-altertable/commit/37a44302ea70309a8a11f9c748306a2a184fe993))
+* **layout:** apply Altertable partition hints ([#25](https://github.com/altertable-ai/dlt-altertable/issues/25)) ([4b36a75](https://github.com/altertable-ai/dlt-altertable/commit/4b36a75fef8db05c7d8b6f8dac99f0ca668d993e))
+* support dlt nested merges and deletes ([#28](https://github.com/altertable-ai/dlt-altertable/issues/28)) ([61e6259](https://github.com/altertable-ai/dlt-altertable/commit/61e6259daa463202788968f6b8716f3e2bfb88e4))
+
+
+### Bug Fixes
+
+* **destination:** reject case-insensitive identifier collisions ([#29](https://github.com/altertable-ai/dlt-altertable/issues/29)) ([fd17d00](https://github.com/altertable-ai/dlt-altertable/commit/fd17d008359bb0cb8a32dc73caef97a28f6c8e79))
+* **load:** drop resource tables on refresh ([#24](https://github.com/altertable-ai/dlt-altertable/issues/24)) ([1bdc868](https://github.com/altertable-ai/dlt-altertable/commit/1bdc8683e086b2e1c7f2d6396193d35d4519029d))
+
+
+### Performance Improvements
+
+* tune dlt performance defaults ([84af041](https://github.com/altertable-ai/dlt-altertable/commit/84af041f1946712adb997b9f7463157de7f6d15f))
+
 ## [0.1.5](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.4...dlt-altertable-v0.1.5) (2026-10-01)
 
 
