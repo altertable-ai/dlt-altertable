@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from datetime import UTC, datetime
 from functools import cached_property, partial
 from typing import cast, override
@@ -19,7 +20,8 @@ from dlt.common.destination.exceptions import (
 )
 from dlt.common.schema import TSchemaTables, TTableSchema
 from dlt.common.schema.utils import get_nested_tables, get_root_table, has_column_with_prop
-from dlt.common.storages.load_package import destination_state
+from dlt.common.storages.exceptions import CurrentLoadPackageStateNotAvailable
+from dlt.common.storages.load_package import destination_state, load_package_state
 from dlt.common.storages.load_storage import ParsedLoadJobFileName
 from dlt.destinations.impl.destination.destination import DestinationClient
 from dlt.destinations.job_impl import DestinationParquetLoadJob
@@ -129,8 +131,27 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
         return any(row[0] == table_name for row in rows)
 
     def initialize_storage(self, truncate_tables: Iterable[str] | None = None) -> None:
+        tables = tuple(truncate_tables or ())
+        if self.config.allow_destructive_refresh is not True:
+            # dlt first initializes storage without truncate_tables, before storing the schema.
+            with suppress(CurrentLoadPackageStateNotAvailable):
+                if tables or load_package_state()["state"].get("truncated_tables"):
+                    raise DestinationTerminalException(
+                        "Truncating resource tables requires "
+                        "altertable(allow_destructive_refresh=True)."
+                    )
         for table_name in (self.schema.version_table_name, self.schema.loads_table_name):
             create_or_evolve_table(self.config, self.schema.tables[table_name])
+        for table_name in tables:
+            if self._table_exists(table_name):
+                api.execute_sql(
+                    self.config, f"DELETE FROM {qualified_table_name(self.config, table_name)}"
+                )
+
+    @override
+    def should_truncate_table_before_load(self, table_name: str) -> bool:
+        # The first replacement upload recreates its table; only explicit refreshes truncate.
+        return False
 
     def is_storage_initialized(self) -> bool:
         return self._table_exists(self.schema.version_table_name)
