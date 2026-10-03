@@ -133,7 +133,7 @@ def post_query(
 
 def execute_sql(config: AltertableClientConfiguration, statement: str) -> list[list]:
     response = post_query(config, statement)
-    payload = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+    payload = [json.loads(line) for line in response.text.split("\n") if line.strip()]
     if len(payload) < 2 or not isinstance(payload[0], dict) or "error" in payload[0]:
         raise RuntimeError(f"Malformed query response for {statement!r}: missing headers or rows.")
     if isinstance(payload[1], list) and not all(

@@ -214,6 +214,25 @@ def test_query_errors_use_server_status_and_message_without_inspecting_the_query
         assert repr(query_with_error_text) in str(failure.value)
 
 
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\u0085"])
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_ndjson_preserves_unicode_separators(monkeypatch, separator, line_ending) -> None:
+    value = f"before{separator}after"
+    entries = [{}, [{"name": "value", "type": "VARCHAR"}], [value]]
+    response = requests.Response()
+    response.status_code = 200
+    response.encoding = "utf-8"
+    response._content = (
+        line_ending.join(json.dumps(entry, ensure_ascii=False) for entry in entries)
+        + line_ending * 2
+    ).encode()
+    monkeypatch.setattr(api.session, "post", lambda *a, **kw: response)
+
+    rows = api.execute_sql(make_config(), "SELECT value")
+
+    assert rows == [[value]]
+
+
 @pytest.mark.parametrize(
     ("statement", "expected_error"),
     [
