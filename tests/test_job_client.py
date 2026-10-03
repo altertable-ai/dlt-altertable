@@ -123,6 +123,74 @@ def test_drop_tables_accepts_the_destination_opt_in(server, tmp_path):
     assert server.statements == ['DROP TABLE IF EXISTS "lakehouse"."raw"."event""names"']
 
 
+def test_truncating_tables_requires_explicit_opt_in_before_any_query(server, pipeline):
+    with pipeline.destination_client() as client:
+        with pytest.raises(DestinationTerminalException, match="allow_destructive_refresh=True"):
+            client.initialize_storage(truncate_tables=["events"])
+
+    assert server.statements == []
+
+
+@pytest.mark.ducklake
+def test_drop_data_refresh_preserves_schema_and_unselected_tables(local_pipeline, connection):
+    local_pipeline.destination.config_params["allow_destructive_refresh"] = True
+    local_pipeline.run(
+        [
+            dlt.resource(
+                [{"id": 1, "label": "old", "items": ["old"]}],
+                name="events",
+                max_table_nesting=1,
+            ),
+            dlt.resource([{"id": 7}], name="untouched"),
+        ]
+    )
+
+    local_pipeline.run(
+        dlt.resource([{"id": 2, "items": ["new"]}], name="events", max_table_nesting=1),
+        refresh="drop_data",
+    )
+
+    assert connection.execute("SELECT id, label FROM lakehouse.raw.events").fetchall() == [
+        (2, None)
+    ]
+    assert connection.execute("SELECT value FROM lakehouse.raw.events__items").fetchall() == [
+        ("new",)
+    ]
+    assert connection.execute("SELECT id FROM lakehouse.raw.untouched").fetchall() == [(7,)]
+
+    local_pipeline.run([{"id": 3}], table_name="events")
+
+    assert connection.execute("SELECT id FROM lakehouse.raw.events ORDER BY id").fetchall() == [
+        (2,),
+        (3,),
+    ]
+
+
+@pytest.mark.ducklake
+def test_drop_data_refresh_rejects_schema_changes_before_publishing_them(local_pipeline):
+    local_pipeline.run([{"id": 1}], table_name="events")
+    old_schema_hash = local_pipeline.default_schema.stored_version_hash
+
+    with pytest.raises(PipelineStepFailed, match="allow_destructive_refresh=True"):
+        local_pipeline.run(
+            [{"id": 2, "new_column": "new"}], table_name="events", refresh="drop_data"
+        )
+
+    with local_pipeline.destination_client() as client:
+        assert client.get_stored_schema().version_hash == old_schema_hash
+
+
+@pytest.mark.ducklake
+def test_drop_data_refresh_recreates_missing_destination_tables(local_pipeline, connection):
+    local_pipeline.destination.config_params["allow_destructive_refresh"] = True
+    local_pipeline.run([{"id": 1}], table_name="events")
+    connection.execute("DROP TABLE lakehouse.raw.events")
+
+    local_pipeline.run([{"id": 2}], table_name="events", refresh="drop_data")
+
+    assert connection.execute("SELECT id FROM lakehouse.raw.events").fetchall() == [(2,)]
+
+
 @pytest.mark.parametrize("unauthenticated", [False, True])
 def test_state_lookup_errors_preserve_local_state(server, pipeline, unauthenticated):
     pipeline.run([{"id": 1}], table_name="events")
