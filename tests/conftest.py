@@ -1,16 +1,23 @@
 import io
 import json as jsonlib
-import re
+import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+import dlt
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
 import dlt_altertable.api
+from dlt_altertable import altertable
 from dlt_altertable.configuration import AltertableClientConfiguration
+from dlt_altertable.table_schema import qualified_table_name
+
+if TYPE_CHECKING:
+    import duckdb
 
 DESTINATION_OPTIONS = {
     "host": "altertable.test",
@@ -23,8 +30,6 @@ DESTINATION_OPTIONS = {
 }
 
 BASE_URL = "http://altertable.test:15002"
-
-QUALIFIED_TABLE = re.compile(r'"[^"]+"\."[^"]+"\."([^"]+)"')
 
 
 def make_config(**overrides: Any) -> AltertableClientConfiguration:
@@ -69,9 +74,6 @@ class FakeServer:
     query_payloads: list[dict[str, Any]] = field(default_factory=list)
     existing_columns: list[str] = field(default_factory=list)
     catalogs: dict[str, bool] = field(default_factory=lambda: {"lakehouse": False})
-    counts: dict[str, list[int]] = field(default_factory=dict)
-    counts_asked: dict[str, str] = field(default_factory=dict)
-    missing_tables: list[str] = field(default_factory=list)
     successes_before_failures: int = 0
     transient_upload_failures: int = 0
     terminal_upload_failure: bool = False
@@ -83,25 +85,6 @@ class FakeServer:
 
     def attempts_for(self, table_name: str) -> int:
         return self.attempted_tables.count(table_name)
-
-    def count_query_response(self, statement: str) -> FakeResponse:
-        qualified_table = QUALIFIED_TABLE.search(statement)
-        assert qualified_table, f"count query names no qualified table: {statement}"
-        table_name = qualified_table.group(1)
-        self.counts_asked[table_name] = statement
-        if table_name in self.counts:
-            return query_response([self.counts[table_name]])
-        uploaded_row_count = self.uploaded_row_count(table_name, statement)
-        selected_count_columns = statement.count("count(")
-        return query_response([[uploaded_row_count] * selected_count_columns])
-
-    def uploaded_row_count(self, table_name: str, count_query: str) -> int:
-        """A replace count query spans the whole replacement table, so it names no load id,
-        while an append or merge one counts only the rows whose load id it names."""
-        rows = [row for upload in self.uploads_for(table_name) for row in upload.rows]
-        if "_dlt_load_id" not in count_query:
-            return len(rows)
-        return sum(1 for row in rows if f"'{row['_dlt_load_id']}'" in count_query)
 
     @property
     def schema_lookups(self) -> list[str]:
@@ -125,7 +108,7 @@ class FakeServer:
             return query_response([])
         if "information_schema.tables" in statement:
             landed = {upload.params["table"] for upload in self.uploads}
-            return query_response([[t] for t in sorted(landed - set(self.missing_tables))])
+            return query_response([[t] for t in sorted(landed)])
         if "duckdb_databases" in statement:
             excluded = {"memory"} if "database_name <> 'memory'" in statement else set()
             return query_response(
@@ -135,8 +118,6 @@ class FakeServer:
                     if name not in excluded
                 ]
             )
-        if statement.startswith("SELECT count"):
-            return self.count_query_response(statement)
         if statement.startswith("SELECT column_name, data_type"):
             return query_response([[column, "BIGINT"] for column in self.existing_columns])
         return query_response([[column] for column in self.existing_columns])
@@ -206,32 +187,63 @@ def write_parquet(tmp_path: Path):
 
 
 @pytest.fixture
-def connection(tmp_path: Path, request):
+def connection(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> Iterator["duckdb.DuckDBPyConnection"]:
     import duckdb
 
-    connection = duckdb.connect()
-    try:
-        connection.execute("INSTALL ducklake")
-        connection.execute("LOAD ducklake")
-    except duckdb.Error as error:
-        pytest.skip(f"DuckDB cannot load its ducklake extension: {error}")
-    connection.execute(
-        f"ATTACH 'ducklake:{tmp_path}/metadata.duckdb' AS lakehouse "
-        f"(DATA_PATH '{tmp_path}/data/', METADATA_SCHEMA '{getattr(request, 'param', 'main')}')"
-    )
-    connection.execute("CALL lakehouse.set_option('data_inlining_row_limit', 0)")
-    yield connection
-    connection.close()
+    with duckdb.connect() as connection:
+        try:
+            connection.execute("INSTALL ducklake")
+            connection.execute("LOAD ducklake")
+        except duckdb.Error as error:
+            if os.environ.get("CI"):
+                raise
+            pytest.skip(f"DuckDB cannot load its ducklake extension: {error}")
+        connection.execute(
+            f"ATTACH 'ducklake:{tmp_path}/metadata.duckdb' AS lakehouse "
+            f"(DATA_PATH '{tmp_path}/data/', METADATA_SCHEMA '{getattr(request, 'param', 'main')}')"
+        )
+        connection.execute("CALL lakehouse.set_option('data_inlining_row_limit', 0)")
+        yield connection
 
 
-def worker_ingest_into(connection):
-    def upload(config, endpoint, params, path, action):
+@pytest.fixture
+def local_api(connection: "duckdb.DuckDBPyConnection", monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOAD__WORKERS", "1")
+    monkeypatch.setenv("LOAD__RAISE_ON_MAX_RETRIES", "1")
+
+    def execute(config: AltertableClientConfiguration, statement: str) -> list[tuple[Any, ...]]:
+        with connection.cursor() as session:
+            return session.execute(statement).fetchall()
+
+    def upload(
+        config: AltertableClientConfiguration,
+        endpoint: str,
+        params: dict[str, str],
+        path: str,
+        action: str,
+    ) -> None:
         assert endpoint == "upload"
-        target = f'lakehouse.raw."{params["table"]}"'
+        target = qualified_table_name(config, params["table"])
         if params["mode"] == "overwrite":
-            connection.execute(f"DROP TABLE IF EXISTS {target}")
-            connection.execute(f"CREATE TABLE {target} AS SELECT * FROM read_parquet(?)", [path])
+            connection.execute(
+                f"CREATE OR REPLACE TABLE {target} AS SELECT * FROM read_parquet(?)", [path]
+            )
         else:
             connection.execute(f"INSERT INTO {target} SELECT * FROM read_parquet(?)", [path])
 
-    return upload
+    monkeypatch.setattr(dlt_altertable.api, "execute_sql", execute)
+    monkeypatch.setattr(dlt_altertable.api, "post_parquet", upload)
+
+
+@pytest.fixture
+def local_pipeline(
+    local_api: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> dlt.Pipeline:
+    monkeypatch.setenv("SCHEMA__NAMING", "snake_case")
+    return dlt.pipeline(
+        pipeline_name="merge_contract",
+        destination=altertable(**DESTINATION_OPTIONS),
+        pipelines_dir=str(tmp_path),
+    )
