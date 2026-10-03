@@ -11,47 +11,14 @@ from dlt.common.exceptions import TerminalValueError
 from dlt.pipeline.exceptions import PipelineStepFailed
 
 import dlt_altertable.api
-import dlt_altertable.job_client
 from dlt_altertable import altertable, altertable_adapter, verify_load
 from dlt_altertable.merge import stage_file
-from dlt_altertable.table_schema import qualified_table_name
 from tests.conftest import DESTINATION_OPTIONS, make_config
 
 
 def test_staging_requires_a_file_path() -> None:
     with pytest.raises(TerminalValueError, match="Parquet file path"):
         stage_file(make_config(), [{"id": 1}], {"name": "deals", "columns": {}})
-
-
-@pytest.fixture
-def local_pipeline(connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("LOAD__WORKERS", "1")
-    monkeypatch.setenv("LOAD__RAISE_ON_MAX_RETRIES", "1")
-    monkeypatch.setenv("SCHEMA__NAMING", "snake_case")
-
-    def execute(config, statement):
-        with connection.cursor() as session:
-            return session.execute(statement).fetchall()
-
-    def upload(config, endpoint, params, path, action):
-        assert endpoint == "upload"
-        target = qualified_table_name(config, params["table"])
-        if params["mode"] == "overwrite":
-            connection.execute(
-                f"CREATE OR REPLACE TABLE {target} AS SELECT * FROM read_parquet(?)", [path]
-            )
-        else:
-            connection.execute(f"INSERT INTO {target} SELECT * FROM read_parquet(?)", [path])
-
-    for module in ("api", "table_schema", "job_client", "verify"):
-        monkeypatch.setattr(f"dlt_altertable.{module}.execute_sql", execute)
-    monkeypatch.setattr("dlt_altertable.api.post_parquet", upload)
-    monkeypatch.setattr("dlt_altertable.destination.post_parquet", upload)
-    return dlt.pipeline(
-        pipeline_name="merge_contract",
-        destination=altertable(**DESTINATION_OPTIONS),
-        pipelines_dir=str(tmp_path),
-    )
 
 
 def deals(rows: list[dict[str, Any]], **hints: Any):
@@ -264,7 +231,7 @@ def test_retry_does_not_republish_a_merge_that_commits_after_the_receipt_check(
     local_pipeline, connection, monkeypatch, overlapping_snapshot
 ):
     local_pipeline.run(deals([{"id": 1, "name": "old", "items": ["old"]}]))
-    execute = dlt_altertable.job_client.execute_sql
+    execute = dlt_altertable.api.execute_sql
     attempts = 0
     with connection.cursor() as pending:
 
@@ -288,7 +255,7 @@ def test_retry_does_not_republish_a_merge_that_commits_after_the_receipt_check(
                 )
                 return retry.execute(statement).fetchall()
 
-        monkeypatch.setattr(dlt_altertable.job_client, "execute_sql", delay_commit)
+        monkeypatch.setattr(dlt_altertable.api, "execute_sql", delay_commit)
         with pytest.raises(PipelineStepFailed, match="original publication still running"):
             local_pipeline.run(deals([{"id": 1, "name": "new", "items": ["new"]}]))
         assert connection.execute("SELECT name FROM lakehouse.raw.deals").fetchall() == [("old",)]
@@ -319,7 +286,7 @@ def test_staged_merge_resumes_after_a_failed_commit_request(
     local_pipeline, connection, monkeypatch, after_commit
 ):
     local_pipeline.run(deals([{"id": 1, "items": ["old"]}]))
-    execute = dlt_altertable.job_client.execute_sql
+    execute = dlt_altertable.api.execute_sql
 
     def fail_merge(config, statement):
         if statement.startswith("BEGIN"):
@@ -331,7 +298,7 @@ def test_staged_merge_resumes_after_a_failed_commit_request(
             raise RuntimeError("lost commit response")
         return execute(config, statement)
 
-    monkeypatch.setattr(dlt_altertable.job_client, "execute_sql", fail_merge)
+    monkeypatch.setattr(dlt_altertable.api, "execute_sql", fail_merge)
 
     if after_commit:
         local_pipeline.run(deals([{"id": 1, "items": ["new"]}]))
@@ -343,7 +310,7 @@ def test_staged_merge_resumes_after_a_failed_commit_request(
         ("new" if after_commit else "old",)
     ]
 
-    monkeypatch.setattr(dlt_altertable.job_client, "execute_sql", execute)
+    monkeypatch.setattr(dlt_altertable.api, "execute_sql", execute)
     local_pipeline.load()
 
     assert connection.execute("SELECT value FROM lakehouse.raw.deals__items").fetchall() == [

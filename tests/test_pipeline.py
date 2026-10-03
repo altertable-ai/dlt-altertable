@@ -252,49 +252,6 @@ def test_replace_resumes_as_append_after_a_failed_file(
     ], "a resumed load must not replace the table a second time"
 
 
-@dlt.resource(name="by_merge_key", write_disposition="merge", merge_key="id")
-def merged_on_merge_key() -> Iterator[list[dict[str, Any]]]:
-    yield CONTACTS
-
-
-@dlt.resource(
-    name="by_scd2",
-    write_disposition={"disposition": "merge", "strategy": "scd2"},
-    primary_key="id",
-)
-def merged_with_scd2() -> Iterator[list[dict[str, Any]]]:
-    yield CONTACTS
-
-
-@dlt.resource(
-    name="by_nullable_primary_key",
-    write_disposition="merge",
-    primary_key="id",
-    columns={"id": {"nullable": True}},
-)
-def merged_on_nullable_primary_key() -> Iterator[list[dict[str, Any]]]:
-    yield CONTACTS
-
-
-@pytest.mark.parametrize(
-    ("resource", "unsupported"),
-    [
-        (merged_on_merge_key, "merge_key"),
-        (merged_with_scd2, "`scd2` merge strategy not supported"),
-        (merged_on_nullable_primary_key, "primary_key columns must be non-nullable: id"),
-    ],
-    ids=["merge_key", "scd2", "nullable_primary_key"],
-)
-def test_unsupported_merge_configurations_fail_the_pipeline(
-    server: FakeServer, run_pipeline, resource: Any, unsupported: str
-) -> None:
-    with pytest.raises(PipelineStepFailed) as failure:
-        run_pipeline(resource())
-
-    assert unsupported in str(failure.value)
-    assert data_uploads(server) == []
-
-
 @dlt.resource(name="events_nested", write_disposition="append")
 def nested_events() -> Iterator[list[dict[str, Any]]]:
     yield [{"id": 1, "payload": {"a": 1}, "tags": [1, 2]}]

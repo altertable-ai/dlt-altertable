@@ -16,7 +16,7 @@ from dlt.common.schema.utils import (
 )
 from dlt.common.utils import merge_row_counts
 
-from dlt_altertable.api import execute_sql
+from dlt_altertable import api
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.destination import altertable, primary_key_columns
 from dlt_altertable.table_schema import qualified_table_name
@@ -39,7 +39,7 @@ def resolved_config(destination: AnyDestination_CO) -> AltertableClientConfigura
 def verify_catalog(**options: Any) -> list[str]:
     """Report why the configured catalog cannot be loaded into."""
     config = resolved_config(altertable(**options))
-    attached = execute_sql(
+    attached = api.execute_sql(
         config,
         "SELECT database_name, readonly FROM duckdb_databases() "
         "WHERE NOT internal AND database_name <> 'memory'",
@@ -68,7 +68,7 @@ def verify_catalog(**options: Any) -> list[str]:
 
 
 def existing_table_names(config: AltertableClientConfiguration) -> set[str]:
-    rows = execute_sql(
+    rows = api.execute_sql(
         config,
         "SELECT table_name FROM information_schema.tables "
         f"WHERE table_catalog = {escape_duckdb_literal(config.catalog)} "
@@ -257,7 +257,7 @@ def verify_table(
     query = count_query(
         qualified_table_name(config, table_name), disposition, key_columns, load_id_predicate or ""
     )
-    lakehouse_counts = execute_sql(config, query)[0]
+    lakehouse_counts = api.execute_sql(config, query)[0]
     problems.extend(
         count_problems(
             table_name,

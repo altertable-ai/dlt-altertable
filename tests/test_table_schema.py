@@ -1,6 +1,6 @@
 import pytest
 
-from tests.conftest import DESTINATION_OPTIONS, worker_ingest_into
+from tests.conftest import DESTINATION_OPTIONS
 
 
 @pytest.mark.ducklake
@@ -27,22 +27,13 @@ from tests.conftest import DESTINATION_OPTIONS, worker_ingest_into
     ],
 )
 def test_pipeline_preserves_integer_ranges_across_loads(
-    connection, tmp_path, monkeypatch, arrow_types, values, stored_type
+    connection, local_api, tmp_path, arrow_types, values, stored_type
 ):
     import dlt
     import pyarrow as pa
 
     from dlt_altertable import altertable
 
-    monkeypatch.setenv("LOAD__WORKERS", "1")
-    monkeypatch.setenv("LOAD__RAISE_ON_MAX_RETRIES", "1")
-
-    def execute_local(config, statement):
-        return connection.execute(statement).fetchall()
-
-    monkeypatch.setattr("dlt_altertable.table_schema.execute_sql", execute_local)
-    monkeypatch.setattr("dlt_altertable.job_client.execute_sql", execute_local)
-    monkeypatch.setattr("dlt_altertable.destination.post_parquet", worker_ingest_into(connection))
     pipeline = dlt.pipeline(
         pipeline_name="integer_types",
         destination=altertable(**DESTINATION_OPTIONS),
@@ -63,21 +54,14 @@ def test_pipeline_preserves_integer_ranges_across_loads(
 
 
 @pytest.mark.ducklake
-def test_pipeline_preserves_nanosecond_timestamps(connection, tmp_path, monkeypatch):
+def test_pipeline_preserves_nanosecond_timestamps(connection, local_api, tmp_path, monkeypatch):
     import dlt
     import pyarrow as pa
 
     from dlt_altertable import altertable
 
-    monkeypatch.setenv("LOAD__WORKERS", "1")
     monkeypatch.delenv("DATA_WRITER__VERSION", raising=False)
 
-    def execute_local(config, statement):
-        return connection.execute(statement).fetchall()
-
-    monkeypatch.setattr("dlt_altertable.table_schema.execute_sql", execute_local)
-    monkeypatch.setattr("dlt_altertable.job_client.execute_sql", execute_local)
-    monkeypatch.setattr("dlt_altertable.destination.post_parquet", worker_ingest_into(connection))
     pipeline = dlt.pipeline(
         pipeline_name="timestamp_precision",
         destination=altertable(**DESTINATION_OPTIONS),
@@ -101,7 +85,7 @@ def test_pipeline_preserves_nanosecond_timestamps(connection, tmp_path, monkeypa
 
 @pytest.mark.ducklake
 def test_uint64_file_widens_a_column_after_the_schema_lookup_is_cached(
-    connection, tmp_path, monkeypatch
+    connection, local_api, tmp_path, monkeypatch
 ):
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -114,11 +98,6 @@ def test_uint64_file_widens_a_column_after_the_schema_lookup_is_cached(
     evolved_tables = []
     monkeypatch.setattr("dlt_altertable.destination.evolved_tables", lambda: evolved_tables)
     monkeypatch.setattr("dlt_altertable.destination.replaced_tables", lambda: [])
-    monkeypatch.setattr(
-        "dlt_altertable.table_schema.execute_sql",
-        lambda config, statement: connection.execute(statement).fetchall(),
-    )
-    monkeypatch.setattr("dlt_altertable.destination.post_parquet", worker_ingest_into(connection))
     table = {"name": "numbers", "columns": {"value": {"name": "value", "data_type": "bigint"}}}
 
     for index, (arrow_type, value) in enumerate([(pa.int64(), -1), (pa.uint64(), 2**64 - 1)]):

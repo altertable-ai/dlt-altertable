@@ -26,11 +26,7 @@ def events_table():
 
 
 @pytest.mark.ducklake
-def test_unchanged_partition_hints_do_not_create_snapshots(connection, monkeypatch):
-    monkeypatch.setattr(
-        "dlt_altertable.table_schema.execute_sql",
-        lambda config, statement: connection.execute(statement).fetchall(),
-    )
+def test_unchanged_partition_hints_do_not_create_snapshots(connection, local_api):
     table = events_table()
     table["columns"]["category"]["partition"] = True
     config = make_config()
@@ -169,28 +165,12 @@ def test_identifiers_are_quoted_as_identifiers():
     [("direct", 'event"time'), ("snake_case", "eventTime")],
 )
 def test_native_layout_uses_normalized_adapter_references(
-    tmp_path, monkeypatch, naming_convention, column_name, connection
+    tmp_path, monkeypatch, naming_convention, column_name, connection, local_api
 ):
     from dlt_altertable import altertable, altertable_adapter
-    from dlt_altertable.table_schema import qualified_table_name
 
-    monkeypatch.setenv("LOAD__WORKERS", "1")
     monkeypatch.setenv("SCHEMA__NAMING", naming_convention)
 
-    def execute_local(config, statement):
-        return connection.execute(statement).fetchall()
-
-    monkeypatch.setattr("dlt_altertable.table_schema.execute_sql", execute_local)
-    monkeypatch.setattr("dlt_altertable.job_client.execute_sql", execute_local)
-
-    def upload_local(config, endpoint, params, path, action):
-        connection.execute(
-            f"INSERT INTO {qualified_table_name(config, params['table'])} "
-            "SELECT * FROM read_parquet(?)",
-            [path],
-        )
-
-    monkeypatch.setattr("dlt_altertable.destination.post_parquet", upload_local)
     pipeline = dlt.pipeline(
         pipeline_name="normalized_layout",
         destination=altertable(**DESTINATION_OPTIONS),

@@ -26,7 +26,7 @@ from dlt.destinations.job_impl import DestinationParquetLoadJob
 from dlt.destinations.sql_client import WithSqlClient
 from dlt.destinations.utils import verify_schema_merge_disposition
 
-from dlt_altertable.api import execute_sql
+from dlt_altertable import api
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.destination import upsert_params
 from dlt_altertable.layout import PARTITION_HINT, partition_expressions, partition_keys
@@ -119,7 +119,7 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
         return self.sql_client_class(self.config, self.capabilities)
 
     def _table_exists(self, table_name: str) -> bool:
-        rows = execute_sql(
+        rows = api.execute_sql(
             self.config,
             "SELECT table_name FROM information_schema.tables "
             f"WHERE table_catalog = {escape_duckdb_literal(self.config.catalog)} "
@@ -144,7 +144,7 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                 stacklevel=2,
             )
             return
-        execute_sql(self.config, statement)
+        api.execute_sql(self.config, statement)
 
     def drop_tables(self, *tables: str, delete_schema: bool = True) -> None:
         if self.config.allow_destructive_refresh is not True:
@@ -152,11 +152,11 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                 "Dropping resource tables requires altertable(allow_destructive_refresh=True)."
             )
         for table_name in tables:
-            execute_sql(
+            api.execute_sql(
                 self.config, f"DROP TABLE IF EXISTS {qualified_table_name(self.config, table_name)}"
             )
         if delete_schema and self._table_exists(self.schema.version_table_name):
-            execute_sql(
+            api.execute_sql(
                 self.config,
                 f"DELETE FROM {qualified_table_name(self.config, self.schema.version_table_name)} "
                 f"WHERE schema_name = {escape_duckdb_literal(self.schema.name)}",
@@ -181,7 +181,7 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                     "schema": json.dumps(self.schema.to_dict()),
                 },
             )
-            execute_sql(self.config, schema_insert_sql)
+            api.execute_sql(self.config, schema_insert_sql)
         return update
 
     def _insert_statement(self, table_name: str, values: Mapping[str, object]) -> str:
@@ -206,14 +206,14 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
         )
         staging_tables = completed_staging_tables()
         if not staging_tables:
-            execute_sql(self.config, load_receipt_sql)
+            api.execute_sql(self.config, load_receipt_sql)
             return
         staged = staging_config(self.config, load_id)
         receipt_sql = (
             f"SELECT 1 FROM {qualified_table_name(self.config, self.schema.loads_table_name)} "
             f"WHERE load_id = {escape_duckdb_literal(load_id)} AND status = 0"
         )
-        if not execute_sql(self.config, receipt_sql):
+        if not api.execute_sql(self.config, receipt_sql):
             self.sql_client.staging_dataset_name = cast(str, staged.dataset_name)
             statements = [
                 "BEGIN TRANSACTION;",
@@ -231,16 +231,18 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                 statements.extend(merge_statements(chain, self.sql_client, staging_tables))
             statements.extend([f"{load_receipt_sql};", "COMMIT;"])
             try:
-                execute_sql(self.config, "\n".join(statements))
+                api.execute_sql(self.config, "\n".join(statements))
             except Exception:
-                if not execute_sql(self.config, receipt_sql):
+                if not api.execute_sql(self.config, receipt_sql):
                     raise
-        execute_sql(self.config, f"DROP SCHEMA IF EXISTS {qualified_schema_name(staged)} CASCADE")
+        api.execute_sql(
+            self.config, f"DROP SCHEMA IF EXISTS {qualified_schema_name(staged)} CASCADE"
+        )
 
     def _stored_schema(self, where: str) -> StorageSchemaInfo | None:
         if not self._table_exists(self.schema.version_table_name):
             return None
-        rows = execute_sql(
+        rows = api.execute_sql(
             self.config,
             "SELECT version_hash, schema_name, version, engine_version, inserted_at, schema "
             f"FROM {qualified_table_name(self.config, self.schema.version_table_name)} "
@@ -274,7 +276,7 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                 raise DestinationUndefinedEntity(
                     f"Missing state table {qualified_table_name(self.config, table_name)}"
                 )
-        rows = execute_sql(
+        rows = api.execute_sql(
             self.config,
             "SELECT s.version, s.engine_version, s.pipeline_name, s.state, "
             "s.created_at, s.version_hash, s._dlt_load_id "
