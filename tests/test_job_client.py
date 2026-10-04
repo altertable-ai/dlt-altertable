@@ -5,6 +5,7 @@ from dlt.pipeline.exceptions import PipelineStepFailed
 
 import dlt_altertable.api
 from dlt_altertable import altertable
+from dlt_altertable.job_client import AltertableJobClient
 from tests.conftest import DESTINATION_OPTIONS, FakeResponse
 
 
@@ -117,8 +118,9 @@ def test_drop_tables_accepts_the_destination_opt_in(server, tmp_path):
         pipelines_dir=str(tmp_path),
     )
 
-    with pipeline.destination_client() as client:
-        client.drop_tables('event"names', delete_schema=False)
+    client = pipeline.destination_client()
+    assert isinstance(client, AltertableJobClient)
+    client.drop_tables('event"names', delete_schema=False)
 
     assert server.statements == ['DROP TABLE IF EXISTS "lakehouse"."raw"."event""names"']
 

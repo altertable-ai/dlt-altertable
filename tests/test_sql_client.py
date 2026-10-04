@@ -86,9 +86,11 @@ def test_empty_and_null_results_preserve_arrow_types(sql_client, monkeypatch, ro
 
 
 def test_rejects_binding_and_transactions_before_http(sql_client, monkeypatch) -> None:
+    # pytest 8 callable typing: https://github.com/astral-sh/ty/issues/2797
+    reason = "Unsupported operations must not send HTTP requests."
     monkeypatch.setattr(
         "dlt_altertable.api.session.post",
-        lambda *args, **kwargs: pytest.fail("Unsupported operations must not send HTTP requests."),
+        lambda *args, **kwargs: pytest.fail(reason),  # ty: ignore[invalid-argument-type]
     )
     with sql_client:
         with pytest.raises(NotImplementedError, match="parameter"):

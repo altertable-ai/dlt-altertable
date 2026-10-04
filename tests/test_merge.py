@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import dlt
 import pytest
@@ -8,12 +8,17 @@ from dlt.common.destination.exceptions import (
     DestinationTransientException,
 )
 from dlt.common.exceptions import TerminalValueError
+from dlt.common.schema.typing import TTableSchemaColumns
+from dlt.extract import DltResource
 from dlt.pipeline.exceptions import PipelineStepFailed
 
 import dlt_altertable.api
-from dlt_altertable import altertable, altertable_adapter, verify_load
+from dlt_altertable import altertable_adapter, verify_load
 from dlt_altertable.merge import stage_file
-from tests.conftest import DESTINATION_OPTIONS, make_config
+from tests.conftest import make_config
+
+if TYPE_CHECKING:
+    import duckdb
 
 
 def test_staging_requires_a_file_path() -> None:
@@ -21,21 +26,21 @@ def test_staging_requires_a_file_path() -> None:
         stage_file(make_config(), [{"id": 1}], {"name": "deals", "columns": {}})
 
 
-def deals(rows: list[dict[str, Any]], **hints: Any):
+def deals(rows: list[dict[str, Any]], *, columns: TTableSchemaColumns | None = None) -> DltResource:
     return dlt.resource(
         rows,
         name="deals",
         write_disposition="merge",
         primary_key="id",
         max_table_nesting=3,
-        **hints,
+        columns=columns,
     )
 
 
 @pytest.mark.ducklake
 def test_nested_merge_moves_between_partitions_and_deletes_children(
-    local_pipeline, connection, tmp_path
-):
+    local_pipeline: dlt.Pipeline, connection: "duckdb.DuckDBPyConnection", tmp_path: Path
+) -> None:
     def load(rows):
         return local_pipeline.run(
             altertable_adapter(
@@ -71,7 +76,9 @@ def test_nested_merge_moves_between_partitions_and_deletes_children(
 
 
 @pytest.mark.ducklake
-def test_nested_merge_upserts_flattened_properties_and_scalar_items(local_pipeline, connection):
+def test_nested_merge_upserts_flattened_properties_and_scalar_items(
+    local_pipeline: dlt.Pipeline, connection: "duckdb.DuckDBPyConnection"
+) -> None:
     def resource(rows):
         return dlt.resource(
             rows,
@@ -111,8 +118,8 @@ def test_nested_merge_upserts_flattened_properties_and_scalar_items(local_pipeli
 
 @pytest.mark.ducklake
 def test_nested_merge_removes_missing_children_and_preserves_other_parents(
-    local_pipeline, connection
-):
+    local_pipeline: dlt.Pipeline, connection: "duckdb.DuckDBPyConnection"
+) -> None:
     local_pipeline.run(
         deals(
             [
@@ -170,9 +177,12 @@ def test_nested_merge_removes_missing_children_and_preserves_other_parents(
 @pytest.mark.ducklake
 @pytest.mark.parametrize(("live", "deleted"), [(False, True), (None, "2026-10-02")])
 def test_hard_delete_removes_parent_and_children_without_inserting_unknown_tombstones(
-    local_pipeline, connection, live, deleted
-):
-    columns = {"deleted": {"hard_delete": True}}
+    local_pipeline: dlt.Pipeline,
+    connection: "duckdb.DuckDBPyConnection",
+    live: bool | None,
+    deleted: bool | str,
+) -> None:
+    columns: TTableSchemaColumns = {"deleted": {"hard_delete": True}}
     local_pipeline.run(
         deals(
             [
@@ -193,9 +203,14 @@ def test_hard_delete_removes_parent_and_children_without_inserting_unknown_tombs
 
 @pytest.mark.ducklake
 def test_hard_delete_uses_the_latest_cursor_across_files_and_existing_rows(
-    local_pipeline, connection, monkeypatch
-):
-    columns = {"deleted": {"hard_delete": True}, "version": {"dedup_sort": "desc"}}
+    local_pipeline: dlt.Pipeline,
+    connection: "duckdb.DuckDBPyConnection",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    columns: TTableSchemaColumns = {
+        "deleted": {"hard_delete": True},
+        "version": {"dedup_sort": "desc"},
+    }
     monkeypatch.setenv("DATA_WRITER__FILE_MAX_ITEMS", "1")
     local_pipeline.run(deals([{"id": 1, "version": 10, "deleted": False}], columns=columns))
 
@@ -214,8 +229,10 @@ def test_hard_delete_uses_the_latest_cursor_across_files_and_existing_rows(
 
 
 @pytest.mark.ducklake
-def test_nested_merge_does_not_apply_children_of_a_stale_parent(local_pipeline, connection):
-    columns = {"version": {"dedup_sort": "desc"}}
+def test_nested_merge_does_not_apply_children_of_a_stale_parent(
+    local_pipeline: dlt.Pipeline, connection: "duckdb.DuckDBPyConnection"
+) -> None:
+    columns: TTableSchemaColumns = {"version": {"dedup_sort": "desc"}}
     local_pipeline.run(deals([{"id": 1, "version": 10, "items": ["new"]}], columns=columns))
 
     local_pipeline.run(deals([{"id": 1, "version": 9, "items": ["old", "extra"]}], columns=columns))
@@ -283,8 +300,11 @@ def test_retry_does_not_republish_a_merge_that_commits_after_the_receipt_check(
 @pytest.mark.ducklake
 @pytest.mark.parametrize("after_commit", [False, True])
 def test_staged_merge_resumes_after_a_failed_commit_request(
-    local_pipeline, connection, monkeypatch, after_commit
-):
+    local_pipeline: dlt.Pipeline,
+    connection: "duckdb.DuckDBPyConnection",
+    monkeypatch: pytest.MonkeyPatch,
+    after_commit: bool,
+) -> None:
     local_pipeline.run(deals([{"id": 1, "items": ["old"]}]))
     execute = dlt_altertable.api.execute_sql
 
@@ -328,8 +348,10 @@ def test_staged_merge_resumes_after_a_failed_commit_request(
 
 @pytest.mark.ducklake
 def test_fresh_pipeline_resumes_after_a_lost_upload_response(
-    local_pipeline, connection, monkeypatch, tmp_path: Path
-):
+    local_pipeline: dlt.Pipeline,
+    connection: "duckdb.DuckDBPyConnection",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     local_pipeline.run(deals([{"id": 1, "items": ["old"]}]))
     upload = dlt_altertable.api.post_parquet
     child_uploads: list[str] = []
@@ -350,10 +372,10 @@ def test_fresh_pipeline_resumes_after_a_lost_upload_response(
         ("old",)
     ]
 
-    resumed_pipeline = dlt.pipeline(
+    resumed_pipeline = dlt.attach(
         pipeline_name=local_pipeline.pipeline_name,
-        destination=altertable(**DESTINATION_OPTIONS),
-        pipelines_dir=str(tmp_path),
+        destination=local_pipeline.destination,
+        pipelines_dir=local_pipeline.pipelines_dir,
     )
     resumed_pipeline.load()
 
@@ -375,8 +397,10 @@ def test_fresh_pipeline_resumes_after_a_lost_upload_response(
 
 @pytest.mark.ducklake
 def test_failed_staging_upload_does_not_publish_a_partial_parent_chain(
-    local_pipeline, connection, monkeypatch
-):
+    local_pipeline: dlt.Pipeline,
+    connection: "duckdb.DuckDBPyConnection",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     local_pipeline.run(deals([{"id": 1, "items": ["old"]}]))
     monkeypatch.setenv("LOAD__RAISE_ON_FAILED_JOBS", "false")
     upload = dlt_altertable.api.post_parquet
@@ -398,7 +422,9 @@ def test_failed_staging_upload_does_not_publish_a_partial_parent_chain(
 
 
 @pytest.mark.ducklake
-def test_nested_merge_rejects_ambiguous_duplicate_parent_snapshots(local_pipeline, connection):
+def test_nested_merge_rejects_ambiguous_duplicate_parent_snapshots(
+    local_pipeline: dlt.Pipeline, connection: "duckdb.DuckDBPyConnection"
+) -> None:
     local_pipeline.run(deals([{"id": 1, "items": ["old"]}]))
 
     with pytest.raises(PipelineStepFailed, match="one row per primary key"):
@@ -410,8 +436,10 @@ def test_nested_merge_rejects_ambiguous_duplicate_parent_snapshots(local_pipelin
 
 
 @pytest.mark.ducklake
-def test_verify_load_handles_nested_rows_and_a_delete_only_load(local_pipeline):
-    columns = {"deleted": {"hard_delete": True}}
+def test_verify_load_handles_nested_rows_and_a_delete_only_load(
+    local_pipeline: dlt.Pipeline,
+) -> None:
+    columns: TTableSchemaColumns = {"deleted": {"hard_delete": True}}
     local_pipeline.run(
         deals([{"id": 1, "deleted": False, "items": [{"tags": ["A"]}]}], columns=columns)
     )

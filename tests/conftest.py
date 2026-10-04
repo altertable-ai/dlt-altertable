@@ -1,7 +1,7 @@
 import io
 import json as jsonlib
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -10,6 +10,13 @@ import dlt
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from dlt.common.configuration.container import Container
+from dlt.common.storages.file_storage import FileStorage
+from dlt.common.storages.load_package import (
+    LoadPackageStateInjectableContext,
+    PackageStorage,
+    destination_state,
+)
 
 import dlt_altertable.api
 from dlt_altertable import altertable
@@ -19,15 +26,15 @@ from dlt_altertable.table_schema import qualified_table_name
 if TYPE_CHECKING:
     import duckdb
 
-DESTINATION_OPTIONS = {
-    "host": "altertable.test",
-    "catalog": "lakehouse",
-    "dataset_name": "raw",
-    "username": "user",
-    "password": "secret",
-    "port": 15002,
-    "tls": False,
-}
+DESTINATION_OPTIONS = AltertableClientConfiguration(
+    host="altertable.test",
+    catalog="lakehouse",
+    dataset_name="raw",
+    username="user",
+    password="secret",
+    port=15002,
+    tls=False,
+).as_dict_nondefault()
 
 BASE_URL = "http://altertable.test:15002"
 
@@ -136,8 +143,11 @@ class FakeServer:
             return FakeResponse(401, "Invalid credentials")
 
         if url.endswith("/query"):
+            assert json is not None
             return self.post_query(json)
 
+        assert params is not None
+        assert auth is not None
         table_name = params["table"]
         if not table_name.startswith("_dlt"):
             self.attempted_tables.append(table_name)
@@ -177,7 +187,16 @@ def server(monkeypatch: pytest.MonkeyPatch) -> FakeServer:
 
 
 @pytest.fixture
-def write_parquet(tmp_path: Path):
+def load_package_state(tmp_path: Path) -> Iterator[dict[str, Any]]:
+    storage = PackageStorage(FileStorage(str(tmp_path)), initial_state="normalized")
+    storage.create_package("1")
+    context = LoadPackageStateInjectableContext(storage=storage, load_id="1")
+    with Container().injectable_context(context):
+        yield destination_state()
+
+
+@pytest.fixture
+def write_parquet(tmp_path: Path) -> Callable[..., str]:
     def write(rows: list[dict[str, Any]], name: str = "data") -> str:
         path = tmp_path / f"{name}.parquet"
         pq.write_table(pa.Table.from_pylist(rows), path)
@@ -199,7 +218,9 @@ def connection(
         except duckdb.Error as error:
             if os.environ.get("CI"):
                 raise
-            pytest.skip(f"DuckDB cannot load its ducklake extension: {error}")
+            # pytest 8 callable typing: https://github.com/astral-sh/ty/issues/2797
+            reason = f"DuckDB cannot load its ducklake extension: {error}"
+            pytest.skip(reason)  # ty: ignore[too-many-positional-arguments]
         connection.execute(
             f"ATTACH 'ducklake:{tmp_path}/metadata.duckdb' AS lakehouse "
             f"(DATA_PATH '{tmp_path}/data/', METADATA_SCHEMA '{getattr(request, 'param', 'main')}')"
