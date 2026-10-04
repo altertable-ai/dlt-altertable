@@ -6,7 +6,8 @@ import dlt
 import pytest
 from dlt.common.destination.exceptions import DestinationTerminalException
 
-from dlt_altertable import altertable, api, verify_catalog, verify_load
+from dlt_altertable import altertable, verify_catalog, verify_load
+from dlt_altertable import api as altertable_api
 from dlt_altertable.configuration import AltertableClientConfiguration
 from tests.conftest import DESTINATION_OPTIONS, FakeServer
 
@@ -167,7 +168,7 @@ def test_a_failed_merge_load_is_reported(
         pipelines_dir=str(tmp_path / "dlt"),
     )
     seed_pipeline.run(dlt.resource([{"id": 1}], name="contacts", write_disposition="append"))
-    upload = api.post_parquet
+    upload = altertable_api.post_parquet
 
     def fail_merge_upload(
         config: AltertableClientConfiguration,
@@ -180,7 +181,7 @@ def test_a_failed_merge_load_is_reported(
             raise DestinationTerminalException("injected terminal failure")
         return upload(config, endpoint, params, path, action)
 
-    monkeypatch.setattr(api, "post_parquet", fail_merge_upload)
+    monkeypatch.setattr(altertable_api, "post_parquet", fail_merge_upload)
 
     pipeline = loaded_pipeline(merged_contacts())
 

@@ -18,7 +18,7 @@ from dlt.common.storages.load_package import (
 from dlt.common.storages.load_storage import ParsedLoadJobFileName
 from dlt.destinations.sql_jobs import SqlMergeFollowupJob
 
-from dlt_altertable import api
+from dlt_altertable import api as altertable_api
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.sql_client import AltertableSqlClient
 from dlt_altertable.table_schema import (
@@ -91,9 +91,11 @@ def stage_file(config: AltertableClientConfiguration, path: object, table: TTabl
     table_uploads[staging_table_name] = False
     commit_load_package_state()
     create_or_evolve_table(config, table, pq.read_schema(path))
-    api.execute_sql(config, f"CREATE SCHEMA IF NOT EXISTS {qualified_schema_name(staged)}")
+    altertable_api.execute_sql(
+        config, f"CREATE SCHEMA IF NOT EXISTS {qualified_schema_name(staged)}"
+    )
     with aligned_parquet(path, table) as aligned_path:
-        api.post_parquet(
+        altertable_api.post_parquet(
             staged,
             "upload",
             {
