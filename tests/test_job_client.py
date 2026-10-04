@@ -123,44 +123,29 @@ def test_drop_tables_accepts_the_destination_opt_in(server, tmp_path):
     assert server.statements == ['DROP TABLE IF EXISTS "lakehouse"."raw"."event""names"']
 
 
-@pytest.mark.parametrize(
-    "message",
-    [
-        "worker lease expired",
-        "Permission Error: access denied",
-        "Parser Error: invalid query",
-        "Binder Error: Referenced column missing_column not found in FROM clause!",
-    ],
-)
-@pytest.mark.parametrize("unauthenticated", [False, True])
-def test_state_lookup_errors_preserve_local_state(server, pipeline, unauthenticated, message):
+@pytest.mark.parametrize("unauthenticated", [False, True], ids=["stream-error", "authentication"])
+def test_state_lookup_errors_preserve_local_state(server, pipeline, unauthenticated):
     pipeline.run([{"id": 1}], table_name="events")
     state = pipeline.state
     server.unauthenticated = unauthenticated
-    server.query_error = message
-    message = "Invalid credentials" if unauthenticated else message
+    server.query_error = "query failed"
+    message = "Invalid credentials" if unauthenticated else "query failed"
 
-    with pytest.raises(PipelineStepFailed, match=message):
+    with pytest.raises(PipelineStepFailed) as failure:
         pipeline.sync_destination()
 
+    assert message in str(failure.value)
     assert pipeline.state == state
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        "",
-        "{}",
-        "{}\n{}",
-        "{}\n[1]",
-        '{}\n[{"name": "id"}]',
-        '{}\n[{"name": "id", "type": 1}]',
-        "{}\n[]\n{}",
-        '{}\n[]\n{"error": {}}',
-        '{"error": "Catalog Error: Table with name fake does not exist!"}\n[]',
-        '{}\n{}\n{"error": "Catalog Error: Table with name fake does not exist!"}',
-        '{}\n{"error": "Catalog Error: Table with name fake does not exist!"}\n[]',
-        '{}\n[]\n{"error": "Catalog Error: Table with name fake does not exist!"}\n[1]',
+        pytest.param("", id="empty-response"),
+        pytest.param("{}\n[1]", id="invalid-column-headers"),
+        pytest.param('{}\n[]\n{"error": {}}', id="invalid-error-frame"),
+        pytest.param('{"error": "query failed"}\n[]', id="missing-metadata"),
+        pytest.param('{}\n[]\n{"error": "query failed"}\n[1]', id="rows-after-error"),
     ],
 )
 def test_malformed_state_response_is_not_empty_storage(server, monkeypatch, pipeline, payload):

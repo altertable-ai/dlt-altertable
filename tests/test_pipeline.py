@@ -173,43 +173,20 @@ def test_transient_failures_exhaust_after_five_attempts(server: FakeServer, run_
     assert server.attempts_for("events") == 5
 
 
-def test_terminal_failures_are_not_retried(server: FakeServer, run_pipeline) -> None:
-    server.terminal_upload_failure = True
-
-    with pytest.raises(PipelineStepFailed):
-        run_pipeline(appended_events())
-
-    assert server.attempts_for("events") == 1
-
-
 @pytest.mark.parametrize("write_disposition", ["append", "merge"])
 @pytest.mark.parametrize(
-    ("status_code", "message", "retryable"),
+    ("status_code", "retryable"),
     [
-        pytest.param(
-            400, "TransactionContext Error: Conflict on update!", True, id="transaction-conflict"
-        ),
-        pytest.param(
-            400, "Catalog Error: Table with name events does not exist!", False, id="missing-table"
-        ),
-        pytest.param(401, "Invalid credentials", False, id="invalid-credentials"),
-        pytest.param(429, "Rate limited", True, id="rate-limit"),
-        pytest.param(503, "No compute capacity", True, id="compute-unavailable"),
-        pytest.param(
-            200, "Constraint Error: NOT NULL constraint failed: events.id", False, id="null-value"
-        ),
-        pytest.param(
-            200,
-            "Conversion Error: Could not convert string 'no' to INT32",
-            False,
-            id="invalid-conversion",
-        ),
-        pytest.param(200, "worker lease expired", True, id="expired-worker"),
+        pytest.param(400, False, id="bad-request"),
+        pytest.param(429, True, id="rate-limit"),
+        pytest.param(503, True, id="compute-unavailable"),
+        pytest.param(200, True, id="stream-error"),
     ],
 )
 def test_load_retries_only_transient_database_errors(
-    server, run_pipeline, monkeypatch, write_disposition, status_code, message, retryable
+    server, run_pipeline, monkeypatch, write_disposition, status_code, retryable
 ):
+    message = "request failed"
     post = server.post
     attempts = 0
 

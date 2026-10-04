@@ -14,6 +14,7 @@ from dlt.destinations.sql_client import DBApiCursorImpl, SqlClientBase
 
 from dlt_altertable import api
 from dlt_altertable.configuration import AltertableClientConfiguration
+from dlt_altertable.exceptions import make_database_exception
 
 
 class BufferedArrowCursor:
@@ -130,7 +131,7 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
 
     @staticmethod
     def _make_database_exception(ex: Exception) -> Exception:
-        return api.make_database_exception(ex)
+        return make_database_exception(ex)
 
     @staticmethod
     def _query_text(query: AnyStr, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:

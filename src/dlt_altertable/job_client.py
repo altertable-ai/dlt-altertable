@@ -230,8 +230,6 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                     create_or_evolve_table(self.config, table)
                 statements.extend(merge_statements(chain, self.sql_client, staging_tables))
             statements.extend([f"{load_receipt_sql};", "COMMIT;"])
-            # Late commits need the transactional receipt check; overlapping snapshots
-            # conflict on the shared staging tables created by merge_statements.
             try:
                 execute_sql(self.config, "\n".join(statements))
             except Exception:

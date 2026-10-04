@@ -1,87 +1,20 @@
 import json
-import re
 from http import HTTPStatus
 from importlib.metadata import version
 from typing import Any
 
 import requests
-from dlt.destinations.exceptions import (
-    DatabaseTerminalException,
-    DatabaseTransientException,
-    DatabaseUndefinedRelation,
-)
+from dlt.destinations.exceptions import DatabaseTransientException
 from requests.adapters import HTTPAdapter
 from requests.utils import default_user_agent
 
 from dlt_altertable.configuration import AltertableClientConfiguration
+from dlt_altertable.exceptions import TRANSPORT_ERRORS, make_database_exception
 
 UPLOAD_TIMEOUT = (30, 3600)
 QUERY_TIMEOUT = (10, 300)
 UPLOAD_WRITE_BLOCK_BYTES = 1 << 20
 LOADER_WORKERS = 20
-TERMINAL_STATUSES = {
-    HTTPStatus.BAD_REQUEST,
-    HTTPStatus.UNAUTHORIZED,
-    HTTPStatus.PAYMENT_REQUIRED,
-    HTTPStatus.FORBIDDEN,
-    HTTPStatus.NOT_FOUND,
-    HTTPStatus.METHOD_NOT_ALLOWED,
-}
-TRANSPORT_ERRORS = (
-    requests.Timeout,
-    requests.ConnectionError,
-    requests.exceptions.ChunkedEncodingError,
-)
-
-
-class QueryError(RuntimeError):
-    def __init__(self, statement: str, server_message: str) -> None:
-        self.server_message = server_message
-        super().__init__(f"Query failed mid-stream: {server_message}\nSQL: {statement!r}")
-
-
-def make_database_exception(ex: Exception) -> Exception:
-    if isinstance(ex, TRANSPORT_ERRORS):
-        return DatabaseTransientException(ex)
-    if isinstance(ex, requests.HTTPError) and ex.response is not None:
-        status = ex.response.status_code
-        if status != HTTPStatus.BAD_REQUEST:
-            return (
-                DatabaseTerminalException(ex)
-                if status in TERMINAL_STATUSES
-                else DatabaseTransientException(ex)
-            )
-        message = ex.response.text
-    elif isinstance(ex, QueryError):
-        message = ex.server_message
-    else:
-        return ex
-
-    first_line = message.partition("\n")[0]
-    if first_line.startswith(
-        ("TransactionContext Error: ", "Transaction Error: ", "Out of Memory Error: ")
-    ):
-        return DatabaseTransientException(ex)
-    if re.fullmatch(
-        r'Catalog Error: (?:(?:Table|Schema) with name [^"\r\n]+ does not exist!|'
-        r'Table with name "[^"\r\n]+" does not exist because schema "[^"\r\n]+" does not exist\.)|'
-        r'Binder Error: Schema "[^"\r\n]+" not found in DuckLakeCatalog "[^"\r\n]+"',
-        first_line,
-    ):
-        return DatabaseUndefinedRelation(ex)
-    if isinstance(ex, requests.HTTPError) or first_line.startswith(
-        (
-            "Catalog Error: ",
-            "Binder Error: ",
-            "Conversion Error: ",
-            "Constraint Error: ",
-            "Out of Range Error: ",
-            "Not implemented Error: ",
-            "Permission Error: ",
-        )
-    ):
-        return DatabaseTerminalException(ex)
-    return DatabaseTransientException(ex)
 
 
 class LargeBlockAdapter(HTTPAdapter):
@@ -156,8 +89,8 @@ def execute_sql(config: AltertableClientConfiguration, statement: str) -> list[l
             raise RuntimeError(
                 f"Malformed query response for {statement!r}: invalid rows or error."
             )
-        error = QueryError(statement, entry["error"])
-        raise make_database_exception(error) from error
+        error = RuntimeError(f"Query failed mid-stream: {entry['error']}\nSQL: {statement!r}")
+        raise DatabaseTransientException(error) from error
     return payload[2:]
 
 
