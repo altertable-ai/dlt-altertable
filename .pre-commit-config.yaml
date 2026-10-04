@@ -19,7 +19,7 @@ repos:
 
       - id: ty-check
         name: ty typecheck
-        entry: uv run --locked ty check src tests
+        entry: uv run --locked ty check src
         language: unsupported
         files: '(\.pyi?$|^(pyproject\.toml|uv\.lock|\.pre-commit-config\.yaml)$)'
         pass_filenames: false

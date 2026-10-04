@@ -133,7 +133,6 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
     def initialize_storage(self, truncate_tables: Iterable[str] | None = None) -> None:
         tables = tuple(truncate_tables or ())
         if self.config.allow_destructive_refresh is not True:
-            # dlt first initializes storage without truncate_tables, before storing the schema.
             with suppress(CurrentLoadPackageStateNotAvailable):
                 if tables or load_package_state()["state"].get("truncated_tables"):
                     raise DestinationTerminalException(
@@ -150,7 +149,6 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
 
     @override
     def should_truncate_table_before_load(self, table_name: str) -> bool:
-        # The first replacement upload recreates its table; only explicit refreshes truncate.
         return False
 
     def is_storage_initialized(self) -> bool:

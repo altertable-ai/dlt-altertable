@@ -218,9 +218,8 @@ def connection(
         except duckdb.Error as error:
             if os.environ.get("CI"):
                 raise
-            # pytest 8 callable typing: https://github.com/astral-sh/ty/issues/2797
             reason = f"DuckDB cannot load its ducklake extension: {error}"
-            pytest.skip(reason)  # ty: ignore[too-many-positional-arguments]
+            pytest.skip(reason)
         connection.execute(
             f"ATTACH 'ducklake:{tmp_path}/metadata.duckdb' AS lakehouse "
             f"(DATA_PATH '{tmp_path}/data/', METADATA_SCHEMA '{getattr(request, 'param', 'main')}')"

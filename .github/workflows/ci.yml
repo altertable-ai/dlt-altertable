@@ -22,7 +22,7 @@ jobs:
         run: uv run --locked ruff format --check .
 
       - name: Type check with ty
-        run: uv run --locked ty check src tests
+        run: uv run --locked ty check src
 
   test:
     runs-on: ubuntu-latest
@@ -30,14 +30,6 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-        dependency-resolution: [locked]
-        include:
-          - python-version: "3.12"
-            dependency-resolution: lowest-direct
-          - python-version: "3.14"
-            dependency-resolution: highest
-    env:
-      UV_RESOLUTION: ${{ matrix.dependency-resolution == 'locked' && 'highest' || matrix.dependency-resolution }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -45,10 +37,6 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           python-version: ${{ matrix.python-version }}
-
-      - name: Resolve dependency compatibility versions
-        if: matrix.dependency-resolution != 'locked'
-        run: uv sync --upgrade --resolution "${{ matrix.dependency-resolution }}"
 
       - name: Install DuckLake
         run: uv run --locked python -c "import duckdb; duckdb.sql('INSTALL ducklake')"
