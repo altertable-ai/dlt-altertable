@@ -58,7 +58,9 @@ def make_database_exception(ex: Exception) -> Exception:
         return ex
 
     first_line = message.partition("\n")[0]
-    if first_line.startswith(("TransactionContext Error: ", "Transaction Error: ")):
+    if first_line.startswith(
+        ("TransactionContext Error: ", "Transaction Error: ", "Out of Memory Error: ")
+    ):
         return DatabaseTransientException(ex)
     if re.fullmatch(
         r'Catalog Error: (?:(?:Table|Schema) with name [^"\r\n]+ does not exist!|'

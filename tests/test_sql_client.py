@@ -337,6 +337,25 @@ def test_http_transaction_conflicts_are_transient(connection, monkeypatch, write
         api.post_parquet(make_config(), "upsert", {}, write_parquet([{"id": 1}]), "upsert")
 
 
+@pytest.mark.parametrize("status_code", [200, 400])
+def test_out_of_memory_errors_are_transient(monkeypatch, status_code):
+    statement = "SELECT count(DISTINCT i) FROM range(1000000) t(i)"
+    with duckdb.connect() as connection:
+        connection.execute("SET memory_limit='1MB'")
+        with pytest.raises(duckdb.OutOfMemoryException) as database_failure:
+            connection.execute(statement)
+    message = str(database_failure.value)
+    response = requests.Response()
+    response.status_code = status_code
+    response._content = (
+        query_response([{"error": message}]).text if status_code == 200 else message
+    ).encode()
+    monkeypatch.setattr(api.session, "post", lambda *a, **kw: response)
+
+    with pytest.raises(DatabaseTransientException):
+        api.execute_sql(make_config(), statement)
+
+
 @pytest.mark.parametrize(
     "error",
     [
