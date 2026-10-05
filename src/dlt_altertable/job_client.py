@@ -209,16 +209,17 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
             execute_sql(self.config, load_receipt_sql)
             return
         staged = staging_config(self.config, load_id)
-        load_committed = bool(
-            execute_sql(
-                self.config,
-                f"SELECT 1 FROM {qualified_table_name(self.config, self.schema.loads_table_name)} "
-                f"WHERE load_id = {escape_duckdb_literal(load_id)} AND status = 0",
-            )
+        receipt_sql = (
+            f"SELECT 1 FROM {qualified_table_name(self.config, self.schema.loads_table_name)} "
+            f"WHERE load_id = {escape_duckdb_literal(load_id)} AND status = 0"
         )
-        if not load_committed:
+        if not execute_sql(self.config, receipt_sql):
             self.sql_client.staging_dataset_name = cast(str, staged.dataset_name)
-            statements = ["BEGIN TRANSACTION;"]
+            statements = [
+                "BEGIN TRANSACTION;",
+                f"SELECT CASE WHEN EXISTS ({receipt_sql}) THEN error('Load already committed') "
+                "ELSE TRUE END;",
+            ]
             roots = {
                 cast(str, get_root_table(self.schema.tables, name)["name"])
                 for name in staging_tables
@@ -229,7 +230,11 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
                     create_or_evolve_table(self.config, table)
                 statements.extend(merge_statements(chain, self.sql_client, staging_tables))
             statements.extend([f"{load_receipt_sql};", "COMMIT;"])
-            execute_sql(self.config, "\n".join(statements))
+            try:
+                execute_sql(self.config, "\n".join(statements))
+            except Exception:
+                if not execute_sql(self.config, receipt_sql):
+                    raise
         execute_sql(self.config, f"DROP SCHEMA IF EXISTS {qualified_schema_name(staged)} CASCADE")
 
     def _stored_schema(self, where: str) -> StorageSchemaInfo | None:

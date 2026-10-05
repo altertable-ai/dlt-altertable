@@ -10,6 +10,7 @@ from dlt.common.destination.exceptions import (
 )
 from dlt.common.exceptions import TerminalValueError
 from dlt.common.schema import TTableSchema
+from dlt.destinations.exceptions import DatabaseTransientException
 from dlt.load.configuration import LoaderConfiguration
 from dlt.load.utils import get_available_worker_slots
 
@@ -437,7 +438,7 @@ def test_server_failure_names_the_ingest_operation_and_target(
 ) -> None:
     server.transient_upload_failures = 1
 
-    with pytest.raises(RuntimeError) as failure:
+    with pytest.raises(DatabaseTransientException) as failure:
         sink(write_parquet(rows), table, config=make_config())
 
     assert f"{operation} lakehouse.raw.contacts" in str(failure.value)
@@ -450,7 +451,7 @@ def test_query_stream_errors_are_transient(
 ) -> None:
     server.query_error = "worker lease expired"
 
-    with pytest.raises(RuntimeError) as failure:
+    with pytest.raises(DatabaseTransientException) as failure:
         sink(write_parquet(rows), table_schema("contacts", "append"), config=make_config())
 
     assert "worker lease expired" in str(failure.value)
@@ -466,7 +467,7 @@ def test_long_query_errors_show_the_cause_before_the_sql(monkeypatch, status) ->
     )
     monkeypatch.setattr("dlt_altertable.api.session.post", lambda *args, **kwargs: response)
 
-    with pytest.raises((RuntimeError, DestinationTerminalException)) as failure:
+    with pytest.raises((DatabaseTransientException, DestinationTerminalException)) as failure:
         execute_sql(make_config(), statement)
 
     detail = str(failure.value)

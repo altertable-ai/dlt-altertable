@@ -259,6 +259,61 @@ def test_nested_merge_does_not_apply_children_of_a_stale_parent(local_pipeline, 
 
 
 @pytest.mark.ducklake
+@pytest.mark.parametrize("overlapping_snapshot", [False, True])
+def test_retry_does_not_republish_a_merge_that_commits_after_the_receipt_check(
+    local_pipeline, connection, monkeypatch, overlapping_snapshot
+):
+    local_pipeline.run(deals([{"id": 1, "name": "old", "items": ["old"]}]))
+    execute = dlt_altertable.job_client.execute_sql
+    attempts = 0
+    with connection.cursor() as pending:
+
+        def delay_commit(config, statement):
+            nonlocal attempts
+            if not statement.startswith("BEGIN"):
+                return execute(config, statement)
+            attempts += 1
+            if attempts == 1:
+                pending.execute(statement.removesuffix("COMMIT;"))
+                raise DestinationTransientException("original publication still running")
+            with connection.cursor() as retry:
+                if overlapping_snapshot:
+                    retry.execute("BEGIN; SELECT * FROM lakehouse.raw._dlt_loads")
+                    statement = statement.removeprefix("BEGIN TRANSACTION;")
+                pending.execute("COMMIT")
+                execute(
+                    config,
+                    "BEGIN; UPDATE lakehouse.raw.deals SET name = 'intervening'; "
+                    "UPDATE lakehouse.raw.deals__items SET value = 'intervening'; COMMIT;",
+                )
+                return retry.execute(statement).fetchall()
+
+        monkeypatch.setattr(dlt_altertable.job_client, "execute_sql", delay_commit)
+        with pytest.raises(PipelineStepFailed, match="original publication still running"):
+            local_pipeline.run(deals([{"id": 1, "name": "new", "items": ["new"]}]))
+        assert connection.execute("SELECT name FROM lakehouse.raw.deals").fetchall() == [("old",)]
+        assert connection.execute("SELECT value FROM lakehouse.raw.deals__items").fetchall() == [
+            ("old",)
+        ]
+
+        local_pipeline.load()
+
+    assert attempts == 2
+    assert connection.execute(
+        "SELECT p.name, c.value FROM lakehouse.raw.deals p "
+        "JOIN lakehouse.raw.deals__items c ON c._dlt_parent_id = p._dlt_id"
+    ).fetchall() == [("intervening", "intervening")]
+    assert connection.execute("SELECT count(*) FROM lakehouse.raw._dlt_loads").fetchone() == (2,)
+    assert (
+        connection.execute(
+            "SELECT schema_name FROM information_schema.schemata "
+            "WHERE schema_name LIKE '%_dlt_staging_%'"
+        ).fetchall()
+        == []
+    )
+
+
+@pytest.mark.ducklake
 @pytest.mark.parametrize("after_commit", [False, True])
 def test_staged_merge_resumes_after_a_failed_commit_request(
     local_pipeline, connection, monkeypatch, after_commit
@@ -278,8 +333,11 @@ def test_staged_merge_resumes_after_a_failed_commit_request(
 
     monkeypatch.setattr(dlt_altertable.job_client, "execute_sql", fail_merge)
 
-    with pytest.raises(PipelineStepFailed):
+    if after_commit:
         local_pipeline.run(deals([{"id": 1, "items": ["new"]}]))
+    else:
+        with pytest.raises(PipelineStepFailed):
+            local_pipeline.run(deals([{"id": 1, "items": ["new"]}]))
 
     assert connection.execute("SELECT value FROM lakehouse.raw.deals__items").fetchall() == [
         ("new" if after_commit else "old",)

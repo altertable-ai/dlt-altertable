@@ -123,25 +123,38 @@ def test_drop_tables_accepts_the_destination_opt_in(server, tmp_path):
     assert server.statements == ['DROP TABLE IF EXISTS "lakehouse"."raw"."event""names"']
 
 
-@pytest.mark.parametrize("unauthenticated", [False, True])
+@pytest.mark.parametrize("unauthenticated", [False, True], ids=["stream-error", "authentication"])
 def test_state_lookup_errors_preserve_local_state(server, pipeline, unauthenticated):
     pipeline.run([{"id": 1}], table_name="events")
     state = pipeline.state
     server.unauthenticated = unauthenticated
-    server.query_error = "worker lease expired"
-    message = "Invalid credentials" if unauthenticated else "worker lease expired"
+    server.query_error = "query failed"
+    message = "Invalid credentials" if unauthenticated else "query failed"
 
-    with pytest.raises(PipelineStepFailed, match=message):
+    with pytest.raises(PipelineStepFailed) as failure:
         pipeline.sync_destination()
 
+    assert message in str(failure.value)
     assert pipeline.state == state
 
 
-@pytest.mark.parametrize("payload", ["", "{}", "{}\n{}", "{}\n[]\n{}"])
-def test_malformed_state_response_is_not_empty_storage(monkeypatch, pipeline, payload):
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param("", id="empty-response"),
+        pytest.param("{}\n[1]", id="invalid-column-headers"),
+        pytest.param('{}\n[]\n{"error": {}}', id="invalid-error-frame"),
+        pytest.param('{"error": "query failed"}\n[]', id="missing-metadata"),
+        pytest.param('{}\n[]\n{"error": "query failed"}\n[1]', id="rows-after-error"),
+    ],
+)
+def test_malformed_state_response_is_not_empty_storage(server, monkeypatch, pipeline, payload):
+    pipeline.run([{"id": 1}], table_name="events")
+    state = pipeline.state
     monkeypatch.setattr(
         dlt_altertable.api.session, "post", lambda *args, **kwargs: FakeResponse(200, payload)
     )
 
     with pytest.raises(PipelineStepFailed, match="Malformed query response"):
         pipeline.sync_destination()
+    assert pipeline.state == state

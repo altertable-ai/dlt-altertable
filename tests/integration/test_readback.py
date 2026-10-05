@@ -5,6 +5,7 @@ import dlt
 import pyarrow as pa
 import pytest
 from dlt.common.destination.exceptions import DestinationTerminalException
+from dlt.destinations.exceptions import DatabaseTransientException
 from dlt.pipeline.exceptions import PipelineStepFailed
 
 pytestmark = pytest.mark.integration
@@ -134,10 +135,10 @@ def test_query_failures_are_not_empty_results(pipeline_factory) -> None:
     loaded_pipeline.run([{"id": 1}], table_name="events")
     missing_table_query = "SELECT * FROM missing_table"
 
-    with pytest.raises(RuntimeError, match="HTTP 500.*missing_table"):
+    with pytest.raises(DatabaseTransientException, match="HTTP 500.*missing_table"):
         loaded_pipeline.dataset()(missing_table_query, _execute_raw_query=True).fetchall()
     with loaded_pipeline.sql_client() as sql_client:
-        with pytest.raises(RuntimeError, match="HTTP 500.*missing_table"):
+        with pytest.raises(DatabaseTransientException, match="HTTP 500.*missing_table"):
             sql_client.execute_sql(missing_table_query)
 
     unauthenticated_pipeline = pipeline_factory("invalid")
