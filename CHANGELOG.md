@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.7](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.6...dlt-altertable-v0.1.7) (2026-10-05)
+
+
+### Bug Fixes
+
+* classify Altertable API errors with dlt exceptions ([#30](https://github.com/altertable-ai/dlt-altertable/issues/30)) ([422b748](https://github.com/altertable-ai/dlt-altertable/commit/422b748693e7b484ac3e3839186a323c5f732adf))
+
+
+### Code Refactoring
+
+* improve integration test reliability ([#32](https://github.com/altertable-ai/dlt-altertable/issues/32)) ([9bbdfd0](https://github.com/altertable-ai/dlt-altertable/commit/9bbdfd0537ea0599963de3a3896727be65dd3871))
+
 ## [0.1.6](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.5...dlt-altertable-v0.1.6) (2026-10-02)
 
 
