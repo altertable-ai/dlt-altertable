@@ -210,7 +210,8 @@ def test_refresh_recreates_columns_and_restores_schema(
     assert fresh_pipeline.dataset().events.select("id").fetchall() == [(2,)]
 
 
-def test_refresh_without_opt_in_preserves_rows_and_stored_schema(pipeline_factory):
+@pytest.mark.parametrize("refresh", ["drop_resources", "drop_data"])
+def test_refresh_without_opt_in_preserves_rows_and_stored_schema(pipeline_factory, refresh):
     from dlt.pipeline.exceptions import PipelineStepFailed
 
     pipeline = pipeline_factory("original")
@@ -218,10 +219,24 @@ def test_refresh_without_opt_in_preserves_rows_and_stored_schema(pipeline_factor
     old_schema_hash = pipeline.default_schema.stored_version_hash
 
     with pytest.raises(PipelineStepFailed, match="allow_destructive_refresh=True"):
-        pipeline.run([{"id": 2}], table_name="events", refresh="drop_resources")
+        pipeline.run([{"id": 2, "new_column": "new"}], table_name="events", refresh=refresh)
 
     fresh_pipeline = pipeline_factory("fresh")
     fresh_pipeline.sync_destination()
     with fresh_pipeline.destination_client() as client:
-        assert client.get_stored_schema_by_hash(old_schema_hash) is not None
+        assert client.get_stored_schema().version_hash == old_schema_hash
     assert fresh_pipeline.dataset().events.select("id").fetchall() == [(1,)]
+
+
+def test_drop_data_refresh_restores_the_preserved_schema(pipeline_factory, monkeypatch):
+    monkeypatch.setenv("DESTINATION__ALTERTABLE__ALLOW_DESTRUCTIVE_REFRESH", "true")
+    pipeline = pipeline_factory("original")
+    pipeline.run([{"id": 1, "label": "old"}], table_name="events")
+    old_schema_hash = pipeline.default_schema.stored_version_hash
+
+    pipeline.run([{"id": 2}], table_name="events", refresh="drop_data")
+    restored = pipeline_factory("fresh")
+    restored.sync_destination()
+
+    assert restored.default_schema.stored_version_hash == old_schema_hash
+    assert restored.dataset().events.select("id", "label").fetchall() == [(2, None)]

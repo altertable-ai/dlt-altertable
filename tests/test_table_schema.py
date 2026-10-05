@@ -1,6 +1,17 @@
-import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-from tests.conftest import DESTINATION_OPTIONS, worker_ingest_into
+import dlt
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+from dlt.common.schema import TTableSchema
+
+from dlt_altertable.destination import _upload
+from tests.conftest import make_config
+
+if TYPE_CHECKING:
+    import duckdb
 
 
 @pytest.mark.ducklake
@@ -27,31 +38,15 @@ from tests.conftest import DESTINATION_OPTIONS, worker_ingest_into
     ],
 )
 def test_pipeline_preserves_integer_ranges_across_loads(
-    connection, tmp_path, monkeypatch, arrow_types, values, stored_type
-):
-    import dlt
-    import pyarrow as pa
-
-    from dlt_altertable import altertable
-
-    monkeypatch.setenv("LOAD__WORKERS", "1")
-    monkeypatch.setenv("LOAD__RAISE_ON_MAX_RETRIES", "1")
-
-    def execute_local(config, statement):
-        return connection.execute(statement).fetchall()
-
-    monkeypatch.setattr("dlt_altertable.table_schema.execute_sql", execute_local)
-    monkeypatch.setattr("dlt_altertable.job_client.execute_sql", execute_local)
-    monkeypatch.setattr("dlt_altertable.destination.post_parquet", worker_ingest_into(connection))
-    pipeline = dlt.pipeline(
-        pipeline_name="integer_types",
-        destination=altertable(**DESTINATION_OPTIONS),
-        dataset_name="raw",
-        pipelines_dir=str(tmp_path / "pipelines"),
-    )
+    connection: "duckdb.DuckDBPyConnection",
+    local_pipeline: dlt.Pipeline,
+    arrow_types: list[str],
+    values: list[int],
+    stored_type: str,
+) -> None:
     for arrow_type, value in zip(arrow_types, values, strict=True):
         source = pa.table({"value": pa.array([value], getattr(pa, arrow_type)())})
-        pipeline.run(dlt.resource(source, name="numbers", write_disposition="append"))
+        local_pipeline.run(dlt.resource(source, name="numbers", write_disposition="append"))
 
     assert connection.execute(
         "SELECT value FROM lakehouse.raw.numbers ORDER BY value"
@@ -63,30 +58,15 @@ def test_pipeline_preserves_integer_ranges_across_loads(
 
 
 @pytest.mark.ducklake
-def test_pipeline_preserves_nanosecond_timestamps(connection, tmp_path, monkeypatch):
-    import dlt
-    import pyarrow as pa
-
-    from dlt_altertable import altertable
-
-    monkeypatch.setenv("LOAD__WORKERS", "1")
+def test_pipeline_preserves_nanosecond_timestamps(
+    connection: "duckdb.DuckDBPyConnection",
+    local_pipeline: dlt.Pipeline,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("DATA_WRITER__VERSION", raising=False)
 
-    def execute_local(config, statement):
-        return connection.execute(statement).fetchall()
-
-    monkeypatch.setattr("dlt_altertable.table_schema.execute_sql", execute_local)
-    monkeypatch.setattr("dlt_altertable.job_client.execute_sql", execute_local)
-    monkeypatch.setattr("dlt_altertable.destination.post_parquet", worker_ingest_into(connection))
-    pipeline = dlt.pipeline(
-        pipeline_name="timestamp_precision",
-        destination=altertable(**DESTINATION_OPTIONS),
-        dataset_name="raw",
-        pipelines_dir=str(tmp_path / "pipelines"),
-    )
-
     source = pa.table({"value": pa.array([1_000_000_001], pa.timestamp("ns"))})
-    pipeline.run(
+    local_pipeline.run(
         dlt.resource(
             source,
             name="events",
@@ -100,26 +80,16 @@ def test_pipeline_preserves_nanosecond_timestamps(connection, tmp_path, monkeypa
 
 
 @pytest.mark.ducklake
+@pytest.mark.usefixtures("local_api", "load_package_state")
 def test_uint64_file_widens_a_column_after_the_schema_lookup_is_cached(
-    connection, tmp_path, monkeypatch
-):
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    from dlt_altertable.destination import _upload
-    from tests.conftest import make_config
-
+    connection: "duckdb.DuckDBPyConnection", tmp_path: Path
+) -> None:
     connection.execute("CREATE SCHEMA lakehouse.raw")
     connection.execute("CREATE TABLE lakehouse.raw.numbers (value BIGINT)")
-    evolved_tables = []
-    monkeypatch.setattr("dlt_altertable.destination.evolved_tables", lambda: evolved_tables)
-    monkeypatch.setattr("dlt_altertable.destination.replaced_tables", lambda: [])
-    monkeypatch.setattr(
-        "dlt_altertable.table_schema.execute_sql",
-        lambda config, statement: connection.execute(statement).fetchall(),
-    )
-    monkeypatch.setattr("dlt_altertable.destination.post_parquet", worker_ingest_into(connection))
-    table = {"name": "numbers", "columns": {"value": {"name": "value", "data_type": "bigint"}}}
+    table: TTableSchema = {
+        "name": "numbers",
+        "columns": {"value": {"name": "value", "data_type": "bigint"}},
+    }
 
     for index, (arrow_type, value) in enumerate([(pa.int64(), -1), (pa.uint64(), 2**64 - 1)]):
         path = tmp_path / f"part{index}.parquet"

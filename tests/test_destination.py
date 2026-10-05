@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -10,11 +11,12 @@ from dlt.common.destination.exceptions import (
 )
 from dlt.common.exceptions import TerminalValueError
 from dlt.common.schema import TTableSchema
+from dlt.common.schema.typing import TTableSchemaColumns, TWriteDisposition
+from dlt.common.typing import TColumnNames, TSortOrder
 from dlt.destinations.exceptions import DatabaseTransientException
 from dlt.load.configuration import LoaderConfiguration
 from dlt.load.utils import get_available_worker_slots
 
-import dlt_altertable.destination
 from dlt_altertable import altertable
 from dlt_altertable.api import execute_sql
 from dlt_altertable.configuration import AltertableClientConfiguration
@@ -39,42 +41,22 @@ ALTERTABLE_ENVIRONMENT = {
 }
 
 
-def table_schema(name: str, write_disposition: str, **hints: Any) -> TTableSchema:
-    return {
-        "name": name,
-        "write_disposition": write_disposition,
-        "columns": {
-            "id": {"name": "id", "data_type": "bigint"},
-            "lastmodifieddate": {"name": "lastmodifieddate", "data_type": "bigint"},
-        },
-        **hints,
+def table_schema(
+    name: str,
+    write_disposition: TWriteDisposition,
+    *,
+    primary_key: TColumnNames = (),
+    dedup_sort: TSortOrder | None = None,
+) -> TTableSchema:
+    columns: TTableSchemaColumns = {
+        "id": {"data_type": "bigint"},
+        "lastmodifieddate": {"data_type": "bigint"},
     }
-
-
-def with_primary_key(table: TTableSchema, *columns: str) -> TTableSchema:
-    for column in columns:
-        table["columns"][column]["primary_key"] = True
-    return table
-
-
-def with_dedup_sort(table: TTableSchema, column: str, order: str = "desc") -> TTableSchema:
-    table["columns"][column]["dedup_sort"] = order
-    return table
-
-
-@pytest.fixture
-def evolved_tables(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    tables: list[str] = []
-    monkeypatch.setattr(dlt_altertable.destination, "evolved_tables", lambda: tables, raising=True)
-    return tables
-
-
-@pytest.fixture
-def replaced_tables(monkeypatch: pytest.MonkeyPatch, evolved_tables: list[str]) -> list[str]:
-    """Stands in for the per-load-package state, which only exists inside a pipeline run."""
-    tables: list[str] = []
-    monkeypatch.setattr(dlt_altertable.destination, "replaced_tables", lambda: tables, raising=True)
-    return tables
+    if dedup_sort is not None:
+        columns["lastmodifieddate"]["dedup_sort"] = dedup_sort
+    return dlt.resource(
+        [], name=name, write_disposition=write_disposition, primary_key=primary_key, columns=columns
+    ).compute_table_schema()
 
 
 @pytest.fixture
@@ -82,7 +64,7 @@ def rows() -> list[dict[str, Any]]:
     return [{"id": 1, "lastmodifieddate": 10}, {"id": 2, "lastmodifieddate": 20}]
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 @pytest.mark.parametrize(
     ("write_disposition", "expected_mode"),
     [
@@ -92,9 +74,9 @@ def rows() -> list[dict[str, Any]]:
 )
 def test_write_disposition_selects_upload_mode(
     server: FakeServer,
-    write_parquet,
+    write_parquet: Callable[..., str],
     rows: list[dict[str, Any]],
-    write_disposition: str,
+    write_disposition: TWriteDisposition,
     expected_mode: str,
 ) -> None:
     sink(write_parquet(rows), table_schema("contacts", write_disposition), config=make_config())
@@ -106,9 +88,9 @@ def test_write_disposition_selects_upload_mode(
 
 def test_replace_only_replaces_the_first_file_of_a_load(
     server: FakeServer,
-    write_parquet,
+    write_parquet: Callable[..., str],
     rows: list[dict[str, Any]],
-    replaced_tables: list[str],
+    load_package_state: dict[str, Any],
 ) -> None:
     for part in range(3):
         sink(
@@ -122,12 +104,12 @@ def test_replace_only_replaces_the_first_file_of_a_load(
         "append",
         "append",
     ]
-    assert replaced_tables == ["deals"]
+    assert load_package_state["replaced_tables"] == ["deals"]
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_replace_bookkeeping_is_per_table(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
     sink(write_parquet(rows, "a"), table_schema("contacts", "replace"), config=make_config())
     sink(write_parquet(rows, "b"), table_schema("deals", "replace"), config=make_config())
@@ -135,13 +117,11 @@ def test_replace_bookkeeping_is_per_table(
     assert [upload.params["mode"] for upload in server.uploads] == ["overwrite", "overwrite"]
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_merge_with_dedup_sort_becomes_the_server_cursor(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
-    table = with_dedup_sort(
-        with_primary_key(table_schema("contacts", "merge"), "id"), "lastmodifieddate"
-    )
+    table = table_schema("contacts", "merge", primary_key="id", dedup_sort="desc")
 
     sink(write_parquet(rows), table, config=make_config())
 
@@ -151,11 +131,11 @@ def test_merge_with_dedup_sort_becomes_the_server_cursor(
     assert upload.params["cursor_field"] == "lastmodifieddate"
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_merge_without_dedup_sort_upserts_on_primary_key_alone(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
-    table = with_primary_key(table_schema("contacts", "merge"), "id", "lastmodifieddate")
+    table = table_schema("contacts", "merge", primary_key=["id", "lastmodifieddate"])
 
     sink(write_parquet(rows), table, config=make_config())
 
@@ -165,17 +145,13 @@ def test_merge_without_dedup_sort_upserts_on_primary_key_alone(
     assert "cursor_field" not in upload.params
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 @pytest.mark.parametrize(
     ("table", "unsupported"),
     [
         (table_schema("contacts", "merge"), "merge without a primary_key"),
         (
-            with_dedup_sort(
-                with_primary_key(table_schema("contacts", "merge"), "id"),
-                "lastmodifieddate",
-                order="asc",
-            ),
+            table_schema("contacts", "merge", primary_key="id", dedup_sort="asc"),
             "dedup_sort 'asc'",
         ),
     ],
@@ -183,7 +159,7 @@ def test_merge_without_dedup_sort_upserts_on_primary_key_alone(
 )
 def test_unsupported_merge_configurations_are_terminal(
     server: FakeServer,
-    write_parquet,
+    write_parquet: Callable[..., str],
     rows: list[dict[str, Any]],
     table: TTableSchema,
     unsupported: str,
@@ -196,11 +172,11 @@ def test_unsupported_merge_configurations_are_terminal(
     assert server.statements == []
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_direct_upsert_rejects_hard_delete_without_staging(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
-    table = with_primary_key(table_schema("contacts", "merge"), "id")
+    table = table_schema("contacts", "merge", primary_key="id")
     table["columns"]["deleted"] = {"name": "deleted", "data_type": "bool", "hard_delete": True}
 
     with pytest.raises(DestinationTerminalException) as failure:
@@ -210,13 +186,11 @@ def test_direct_upsert_rejects_hard_delete_without_staging(
     assert server.uploads == []
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_append_ignores_primary_key_and_dedup_sort_hints(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
-    table = with_dedup_sort(
-        with_primary_key(table_schema("contacts", "append"), "id"), "lastmodifieddate"
-    )
+    table = table_schema("contacts", "append", primary_key="id", dedup_sort="desc")
 
     sink(write_parquet(rows), table, config=make_config())
 
@@ -225,9 +199,9 @@ def test_append_ignores_primary_key_and_dedup_sort_hints(
     assert "primary_key" not in upload.params
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_compute_size_reaches_every_query(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
     assert make_config().compute_size == "XS"
 
@@ -238,9 +212,9 @@ def test_compute_size_reaches_every_query(
     assert {payload["compute_size"] for payload in server.query_payloads} == {"M"}
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_schema_evolution_adds_new_columns_before_the_upload(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
     server.existing_columns = ["id"]
 
@@ -253,9 +227,9 @@ def test_schema_evolution_adds_new_columns_before_the_upload(
     assert server.uploads[0].rows == rows
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_new_tables_skip_schema_evolution(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
     sink(write_parquet(rows), table_schema("contacts", "append"), config=make_config())
 
@@ -268,13 +242,16 @@ def append_table() -> TTableSchema:
 
 
 def merge_table() -> TTableSchema:
-    return with_primary_key(table_schema("contacts", "merge"), "id")
+    return table_schema("contacts", "merge", primary_key="id")
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 @pytest.mark.parametrize("build_table", [append_table, merge_table], ids=["append", "merge"])
 def test_a_missing_table_is_created_before_the_load(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]], build_table
+    server: FakeServer,
+    write_parquet: Callable[..., str],
+    rows: list[dict[str, Any]],
+    build_table: Callable[[], TTableSchema],
 ) -> None:
     """Creating the table from dlt's typed schema keeps column types deliberate for every
     disposition, instead of leaving the table shape to inference on first contact."""
@@ -288,10 +265,13 @@ def test_a_missing_table_is_created_before_the_load(
     assert server.uploads[0].rows == rows
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 @pytest.mark.parametrize("build_table", [append_table, merge_table], ids=["append", "merge"])
 def test_an_existing_table_is_not_recreated(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]], build_table
+    server: FakeServer,
+    write_parquet: Callable[..., str],
+    rows: list[dict[str, Any]],
+    build_table: Callable[[], TTableSchema],
 ) -> None:
     server.existing_columns = ["id", "lastmodifieddate"]
 
@@ -301,9 +281,9 @@ def test_an_existing_table_is_not_recreated(
     assert server.alters == []
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_replace_skips_the_column_lookup(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
     sink(write_parquet(rows), table_schema("contacts", "replace"), config=make_config())
 
@@ -312,10 +292,9 @@ def test_replace_skips_the_column_lookup(
 
 def test_schema_lookup_runs_once_per_existing_table_per_load(
     server: FakeServer,
-    write_parquet,
+    write_parquet: Callable[..., str],
     rows: list[dict[str, Any]],
-    evolved_tables: list[str],
-    replaced_tables: list[str],
+    load_package_state: dict[str, Any],
 ) -> None:
     server.existing_columns = ["id", "lastmodifieddate"]
 
@@ -323,31 +302,32 @@ def test_schema_lookup_runs_once_per_existing_table_per_load(
     sink(write_parquet(rows, "b"), table_schema("contacts", "append"), config=make_config())
 
     assert len(server.schema_lookups) == 1
-    assert evolved_tables == ["contacts"]
+    assert load_package_state["evolved_tables"] == ["contacts"]
 
 
 def test_a_created_table_is_not_cached_as_evolved(
     server: FakeServer,
-    write_parquet,
-    evolved_tables: list[str],
-    replaced_tables: list[str],
+    write_parquet: Callable[..., str],
+    load_package_state: dict[str, Any],
 ) -> None:
     narrow_file = write_parquet([{"id": 1}], "narrow")
     sink(narrow_file, table_schema("contacts", "append"), config=make_config())
 
     assert any(statement.startswith("CREATE TABLE") for statement in server.statements)
-    assert evolved_tables == []
+    assert load_package_state["evolved_tables"] == []
 
     server.existing_columns = ["id"]
     wide_file = write_parquet([{"id": 2, "lastmodifieddate": 20}], "wide")
     sink(wide_file, table_schema("contacts", "append"), config=make_config())
 
     assert any("lastmodifieddate" in statement for statement in server.alters)
-    assert evolved_tables == ["contacts"]
+    assert load_package_state["evolved_tables"] == ["contacts"]
 
 
-@pytest.mark.usefixtures("replaced_tables")
-def test_narrower_files_are_padded_to_the_table_schema(server: FakeServer, write_parquet) -> None:
+@pytest.mark.usefixtures("load_package_state")
+def test_narrower_files_are_padded_to_the_table_schema(
+    server: FakeServer, write_parquet: Callable[..., str]
+) -> None:
     narrow_file = write_parquet([{"id": 1}])
 
     sink(narrow_file, table_schema("contacts", "append"), config=make_config())
@@ -357,9 +337,11 @@ def test_narrower_files_are_padded_to_the_table_schema(server: FakeServer, write
     assert upload.rows == [{"id": 1, "lastmodifieddate": None}]
 
 
-@pytest.mark.usefixtures("replaced_tables")
-def test_narrower_merge_files_are_posted_without_padding(server: FakeServer, write_parquet) -> None:
-    table = with_primary_key(table_schema("contacts", "merge"), "id")
+@pytest.mark.usefixtures("load_package_state")
+def test_narrower_merge_files_are_posted_without_padding(
+    server: FakeServer, write_parquet: Callable[..., str]
+) -> None:
+    table = table_schema("contacts", "merge", primary_key="id")
     narrow_file = write_parquet([{"id": 1}])
 
     sink(narrow_file, table, config=make_config())
@@ -369,8 +351,8 @@ def test_narrower_merge_files_are_posted_without_padding(server: FakeServer, wri
     assert upload.rows == [{"id": 1}]
 
 
-@pytest.mark.usefixtures("replaced_tables")
-def test_wei_columns_are_terminal(server: FakeServer, write_parquet) -> None:
+@pytest.mark.usefixtures("load_package_state")
+def test_wei_columns_are_terminal(server: FakeServer, write_parquet: Callable[..., str]) -> None:
     table = table_schema("transfers", "append")
     table["columns"]["value"] = {"name": "value", "data_type": "wei"}
 
@@ -381,11 +363,11 @@ def test_wei_columns_are_terminal(server: FakeServer, write_parquet) -> None:
     assert server.uploads == []
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_comma_in_key_columns_is_terminal(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
-    table = with_primary_key(table_schema("contacts", "merge"), "id")
+    table = table_schema("contacts", "merge", primary_key="id")
     table["columns"]["external,id"] = {
         "name": "external,id",
         "data_type": "bigint",
@@ -406,9 +388,9 @@ def test_password_is_marked_as_a_secret() -> None:
     assert is_secret_hint(fields["password"])
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_wrong_credentials_fail_terminally(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
     server.unauthenticated = True
 
@@ -419,19 +401,19 @@ def test_wrong_credentials_fail_terminally(
     assert server.uploads == []
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 @pytest.mark.parametrize(
     ("table", "operation"),
     [
         (table_schema("contacts", "append"), "append"),
         (table_schema("contacts", "replace"), "overwrite"),
-        (with_primary_key(table_schema("contacts", "merge"), "id"), "upsert"),
+        (table_schema("contacts", "merge", primary_key="id"), "upsert"),
     ],
     ids=["append", "overwrite", "upsert"],
 )
 def test_server_failure_names_the_ingest_operation_and_target(
     server: FakeServer,
-    write_parquet,
+    write_parquet: Callable[..., str],
     rows: list[dict[str, Any]],
     table: TTableSchema,
     operation: str,
@@ -445,9 +427,9 @@ def test_server_failure_names_the_ingest_operation_and_target(
     assert "503" in str(failure.value)
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_query_stream_errors_are_transient(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
     server.query_error = "worker lease expired"
 
@@ -459,7 +441,9 @@ def test_query_stream_errors_are_transient(
 
 
 @pytest.mark.parametrize("status", [200, 400, 503])
-def test_long_query_errors_show_the_cause_before_the_sql(monkeypatch, status) -> None:
+def test_long_query_errors_show_the_cause_before_the_sql(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
     message = "Table deals: nested upsert requires one row per primary key per load."
     statement = "BEGIN; " + "SELECT 1; " * 300 + "COMMIT;"
     response = (
@@ -475,9 +459,9 @@ def test_long_query_errors_show_the_cause_before_the_sql(monkeypatch, status) ->
     assert statement in detail
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_the_parquet_file_is_posted_verbatim(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
     path = write_parquet(rows)
 
@@ -491,8 +475,8 @@ def test_the_parquet_file_is_posted_verbatim(
     assert upload.params["schema"] == "raw"
 
 
-@pytest.mark.usefixtures("replaced_tables")
-def test_empty_parquet_file_is_still_uploaded(server: FakeServer, tmp_path) -> None:
+@pytest.mark.usefixtures("load_package_state")
+def test_empty_parquet_file_is_still_uploaded(server: FakeServer, tmp_path: Path) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -506,9 +490,9 @@ def test_empty_parquet_file_is_still_uploaded(server: FakeServer, tmp_path) -> N
     assert upload.params["mode"] == "overwrite"
 
 
-@pytest.mark.usefixtures("replaced_tables")
+@pytest.mark.usefixtures("load_package_state")
 def test_connection_parameters_reach_the_request(
-    server: FakeServer, write_parquet, rows: list[dict[str, Any]]
+    server: FakeServer, write_parquet: Callable[..., str], rows: list[dict[str, Any]]
 ) -> None:
     sink(write_parquet(rows), table_schema("contacts", "append"), config=make_config())
 
@@ -564,7 +548,7 @@ def test_file_size_default_can_be_overridden() -> None:
 
 
 def test_named_destination_configuration_keeps_precedence(
-    server, tmp_path: Path, monkeypatch
+    server: FakeServer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DESTINATION__WAREHOUSE__HOST", "named.test")
     monkeypatch.setenv("DESTINATION__ALTERTABLE__HOST", "wrong.test")

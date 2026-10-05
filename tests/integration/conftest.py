@@ -17,7 +17,8 @@ from dlt_altertable.table_schema import qualified_schema_name
 @pytest.fixture
 def mock_config() -> Iterator[AltertableClientConfiguration]:
     if os.environ.get("DLT_ALTERTABLE_INTEGRATION") != "1":
-        pytest.skip("set DLT_ALTERTABLE_INTEGRATION=1 to use a local altertable-mock")
+        reason = "set DLT_ALTERTABLE_INTEGRATION=1 to use a local altertable-mock"
+        pytest.skip(reason)
     endpoint = urlsplit(os.environ.get("DLT_ALTERTABLE_MOCK_URL", "http://127.0.0.1:15100"))
     assert endpoint.hostname in {"localhost", "127.0.0.1"}, "mock must be local"
     assert endpoint.scheme == "http", "mock must use local HTTP"

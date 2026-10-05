@@ -12,7 +12,7 @@ from dlt.common.libs.pyarrow import UnsupportedArrowTypeException, get_column_ty
 from dlt.common.schema.typing import TColumnSchema
 from dlt.destinations.sql_client import DBApiCursorImpl, SqlClientBase
 
-from dlt_altertable import api
+from dlt_altertable import api as altertable_api
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.exceptions import make_database_exception
 
@@ -92,7 +92,7 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
         )
 
     def open_connection(self) -> requests.Session:
-        self._connection = api.session
+        self._connection = altertable_api.session
         return self._connection
 
     def close_connection(self) -> None:
@@ -112,7 +112,7 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
         """Looks the schema up without scoping the query to it: a scoped query fails when the
         schema does not exist."""
         self._ensure_native_conn()
-        rows = api.execute_sql(
+        rows = altertable_api.execute_sql(
             self.config,
             "SELECT 1 FROM information_schema.schemata "
             f"WHERE catalog_name = {escape_duckdb_literal(self.database_name)} "
@@ -147,7 +147,7 @@ class AltertableSqlClient(SqlClientBase[requests.Session | None]):
     def execute_query(self, query: AnyStr, *args: Any, **kwargs: Any) -> Iterator[DBApiCursor]:
         statement = self._query_text(query, args, kwargs)
         self._ensure_native_conn()
-        parquet_response = api.post_query(
+        parquet_response = altertable_api.post_query(
             self.config, statement, output_format="parquet", dataset_name=self.dataset_name
         )
         result_table = pq.ParquetFile(pa.BufferReader(parquet_response.content)).read()

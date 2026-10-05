@@ -1,4 +1,4 @@
-from typing import Literal, NotRequired, TypedDict, TypeGuard
+from typing import Literal, NotRequired, TypedDict, TypeGuard, get_args
 
 from dlt.common.data_writers.escape import escape_postgres_identifier
 from dlt.common.destination.client import PreparedTableSchema
@@ -18,14 +18,7 @@ class PartitionKey(TypedDict):
 
 
 def is_partition_transform(value: object) -> TypeGuard[PartitionTransform]:
-    return isinstance(value, str) and value in (
-        "identity",
-        "year",
-        "month",
-        "day",
-        "hour",
-        "bucket",
-    )
+    return isinstance(value, str) and value in get_args(PartitionTransform.__value__)
 
 
 def partition_keys(keys: object) -> list[PartitionKey]:

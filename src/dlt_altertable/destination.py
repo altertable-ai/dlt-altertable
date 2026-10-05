@@ -16,7 +16,7 @@ from dlt.common.schema.utils import (
 )
 from dlt.destinations.impl.destination.factory import destination as CustomDestination
 
-from dlt_altertable.api import post_parquet
+from dlt_altertable import api as altertable_api
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.table_schema import aligned_parquet, create_or_evolve_table
 
@@ -126,11 +126,11 @@ def _upload(
     }
     action = f"{ingest_mode} {config.catalog}.{config.dataset_name}.{table_name}"
     if upsert is not None:
-        post_parquet(config, "upsert", params | upsert, parquet_file_path, action)
+        altertable_api.post_parquet(config, "upsert", params | upsert, parquet_file_path, action)
     else:
         params["mode"] = ingest_mode
         with aligned_parquet(parquet_file_path, table) as upload_path:
-            post_parquet(config, "upload", params, upload_path, action)
+            altertable_api.post_parquet(config, "upload", params, upload_path, action)
 
     if ingest_mode == "overwrite":
         already_replaced.append(table_name)

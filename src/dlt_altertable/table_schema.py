@@ -16,7 +16,7 @@ from dlt.common.normalizers.naming.direct import NamingConvention
 from dlt.common.schema import TTableSchema
 from dlt.common.schema.typing import TColumnSchema
 
-from dlt_altertable.api import execute_sql
+from dlt_altertable import api as altertable_api
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.layout import partition_expressions
 
@@ -74,7 +74,7 @@ def apply_partitioning(
     clause = (
         f"SET PARTITIONED BY ({', '.join(expressions)})" if expressions else "RESET PARTITIONED BY"
     )
-    execute_sql(
+    altertable_api.execute_sql(
         config, f"ALTER TABLE {qualified_table_name(config, cast(str, table['name']))} {clause}"
     )
 
@@ -89,11 +89,11 @@ def create_table(
         f"{escape_postgres_identifier(name)} {data_type}"
         for name, data_type in column_types.items()
     )
-    execute_sql(
+    altertable_api.execute_sql(
         config,
         f"CREATE SCHEMA IF NOT EXISTS {qualified_schema_name(config)}",
     )
-    execute_sql(
+    altertable_api.execute_sql(
         config,
         f"CREATE TABLE IF NOT EXISTS {qualified_table_name(config, table_name)} ({columns})",
     )
@@ -122,7 +122,7 @@ def create_or_evolve_table(
                 column_types[field.name] = "DECIMAL(20,0)"
     partition_expressions(table)
     table_name = cast(str, table["name"])
-    rows = execute_sql(
+    rows = altertable_api.execute_sql(
         config,
         "SELECT column_name, data_type FROM information_schema.columns "
         f"WHERE table_catalog = {escape_duckdb_literal(config.catalog)} "
@@ -135,7 +135,7 @@ def create_or_evolve_table(
         return False
     for name, data_type in column_types.items():
         if name not in existing:
-            execute_sql(
+            altertable_api.execute_sql(
                 config,
                 f"ALTER TABLE {qualified_table_name(config, table_name)} "
                 f"ADD COLUMN IF NOT EXISTS {escape_postgres_identifier(name)} {data_type}",
@@ -144,7 +144,7 @@ def create_or_evolve_table(
                 f"Added column {name} to {config.catalog}.{config.dataset_name}.{table_name}"
             )
         elif existing[name] == "BIGINT" and data_type == "DECIMAL(20,0)":
-            execute_sql(
+            altertable_api.execute_sql(
                 config,
                 f"ALTER TABLE {qualified_table_name(config, table_name)} "
                 f"ALTER COLUMN {escape_postgres_identifier(name)} TYPE DECIMAL(20,0)",
