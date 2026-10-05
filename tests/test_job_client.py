@@ -1,12 +1,21 @@
+from typing import TYPE_CHECKING
+
 import dlt
 import pytest
-from dlt.common.destination.exceptions import DestinationTerminalException
+from dlt.common.destination.exceptions import (
+    DestinationTerminalException,
+    DestinationTransientException,
+)
 from dlt.pipeline.exceptions import PipelineStepFailed
 
 import dlt_altertable.api
 from dlt_altertable import altertable
+from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.job_client import AltertableJobClient
 from tests.conftest import DESTINATION_OPTIONS, FakeResponse
+
+if TYPE_CHECKING:
+    import duckdb
 
 
 @pytest.fixture
@@ -166,6 +175,84 @@ def test_drop_data_refresh_preserves_schema_and_unselected_tables(local_pipeline
         (2,),
         (3,),
     ]
+
+
+@pytest.mark.ducklake
+def test_drop_data_refresh_clears_children_without_new_child_rows(
+    local_pipeline: dlt.Pipeline, connection: "duckdb.DuckDBPyConnection"
+) -> None:
+    local_pipeline.destination.config_params["allow_destructive_refresh"] = True
+    local_pipeline.run(
+        dlt.resource([{"id": 1, "items": ["old"]}], name="events", max_table_nesting=1)
+    )
+
+    local_pipeline.run(
+        dlt.resource([{"id": 2, "items": []}], name="events", max_table_nesting=1),
+        refresh="drop_data",
+    )
+
+    assert connection.execute("SELECT id FROM lakehouse.raw.events").fetchall() == [(2,)]
+    assert connection.execute("SELECT value FROM lakehouse.raw.events__items").fetchall() == []
+
+
+@pytest.mark.ducklake
+def test_drop_data_refresh_resumes_without_truncating_completed_uploads(
+    local_pipeline: dlt.Pipeline,
+    connection: "duckdb.DuckDBPyConnection",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_pipeline.destination.config_params["allow_destructive_refresh"] = True
+    local_pipeline.run([{"id": 1}], table_name="events")
+    monkeypatch.setenv("NORMALIZE__DATA_WRITER__FILE_MAX_ITEMS", "1")
+    execute = dlt_altertable.api.execute_sql
+    upload = dlt_altertable.api.post_parquet
+    delete_count = 0
+    completed_uploads = 0
+
+    def count_deletes(config: AltertableClientConfiguration, statement: str) -> list[list]:
+        nonlocal delete_count
+        if statement == 'DELETE FROM "lakehouse"."raw"."events"':
+            delete_count += 1
+        return execute(config, statement)
+
+    def fail_after_first_upload(
+        config: AltertableClientConfiguration,
+        endpoint: str,
+        params: dict[str, str],
+        path: str,
+        action: str,
+    ) -> None:
+        nonlocal completed_uploads
+        if params["table"] == "events" and completed_uploads:
+            raise DestinationTransientException("injected upload failure")
+        upload(config, endpoint, params, path, action)
+        if params["table"] == "events":
+            completed_uploads += 1
+
+    monkeypatch.setattr(dlt_altertable.api, "execute_sql", count_deletes)
+    monkeypatch.setattr(dlt_altertable.api, "post_parquet", fail_after_first_upload)
+
+    with pytest.raises(PipelineStepFailed, match="injected upload failure"):
+        local_pipeline.run([{"id": 2}, {"id": 3}], table_name="events", refresh="drop_data")
+
+    partial_rows = connection.execute("SELECT id FROM lakehouse.raw.events").fetchall()
+    assert len(partial_rows) == 1
+    assert partial_rows[0][0] in (2, 3)
+    assert delete_count == 1
+
+    monkeypatch.setattr(dlt_altertable.api, "post_parquet", upload)
+    resumed_pipeline = dlt.attach(
+        pipeline_name=local_pipeline.pipeline_name,
+        pipelines_dir=local_pipeline.pipelines_dir,
+        destination=local_pipeline.destination,
+    )
+    resumed_pipeline.load()
+
+    assert connection.execute("SELECT id FROM lakehouse.raw.events ORDER BY id").fetchall() == [
+        (2,),
+        (3,),
+    ]
+    assert delete_count == 1
 
 
 @pytest.mark.ducklake
