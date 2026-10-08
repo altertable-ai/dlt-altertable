@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import dlt
@@ -125,6 +126,33 @@ def test_replace_appends_the_remaining_files_of_one_load(
     assert len(modes) > 1, "expected the load to be split across several parquet files"
     assert modes[0] == "overwrite"
     assert set(modes[1:]) == {"append"}
+
+
+def test_replace_loads_tables_concurrently_and_files_sequentially(
+    server: FakeServer, run_pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NORMALIZE__DATA_WRITER__FILE_MAX_ITEMS", "2")
+    monkeypatch.setenv("LOAD__RAISE_ON_MAX_RETRIES", "1")
+    first_uploads = Barrier(2, timeout=5)
+    post = server.post
+
+    def synchronize_replacements(url: str, **kwargs: Any) -> FakeResponse:
+        if kwargs.get("params", {}).get("mode") == "overwrite":
+            first_uploads.wait()
+        return post(url, **kwargs)
+
+    monkeypatch.setattr(server, "post", synchronize_replacements)
+    tables = ("contacts", "deals")
+    rows = [{"id": index} for index in range(5)]
+    resources = [dlt.resource(rows, name=name, write_disposition="replace") for name in tables]
+
+    run_pipeline(resources)
+
+    for table_name in tables:
+        uploads = server.uploads_for(table_name)
+        assert [upload.params["mode"] for upload in uploads] == ["overwrite", "append", "append"]
+        loaded_rows = without_lineage([row for upload in uploads for row in upload.rows])
+        assert sorted(loaded_rows, key=lambda row: row["id"]) == rows
 
 
 @pytest.mark.parametrize("arrow", [False, True], ids=["objects", "arrow"])

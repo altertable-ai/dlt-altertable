@@ -527,13 +527,16 @@ def test_missing_configuration_is_terminal_and_names_every_surface() -> None:
     assert "ALTERTABLE_HOST" in str(failure.value)
 
 
-@pytest.mark.parametrize("max_jobs", [None, 4])
-def test_load_concurrency_defaults_to_one_and_can_be_overridden(max_jobs: int | None) -> None:
+@pytest.mark.parametrize("workers", [2, 20])
+@pytest.mark.parametrize("max_jobs", [None, 1, 4, 40])
+def test_load_concurrency_respects_workers_and_optional_destination_limit(
+    workers: int, max_jobs: int | None
+) -> None:
     options = {} if max_jobs is None else {"max_parallel_load_jobs": max_jobs}
     capabilities = altertable(**DESTINATION_OPTIONS, **options).capabilities()
 
-    assert get_available_worker_slots(LoaderConfiguration(workers=20), capabilities, []) == (
-        max_jobs or 1
+    assert get_available_worker_slots(LoaderConfiguration(workers=workers), capabilities, []) == (
+        workers if max_jobs is None else min(workers, max_jobs)
     )
 
 

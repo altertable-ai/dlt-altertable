@@ -170,7 +170,6 @@ class altertable(CustomDestination):
         caps.sqlglot_dialect = "duckdb"
         caps.max_timestamp_precision = NANOSECOND_TIMESTAMP_PRECISION
         caps.recommended_file_size = DEFAULT_UPLOAD_FILE_SIZE_BYTES
-        caps.max_parallel_load_jobs = 1
         caps.parquet_format = ParquetFormatConfiguration(version="2.6")
         caps.escape_identifier = escape_postgres_identifier
         caps.escape_literal = escape_duckdb_literal

@@ -107,7 +107,8 @@ export DATA_WRITER__FILE_MAX_BYTES=268435456  # 256 MiB (0 disables byte-based r
 export DATA_WRITER__COMPRESSION=zstd
 ```
 
-`altertable(max_parallel_load_jobs=2)` allows parallel uploads, subject to `LOAD__WORKERS`.
+Tables load concurrently up to `LOAD__WORKERS` (dlt defaults to 20), with one file per table at a time.
+Use `altertable(max_parallel_load_jobs=2)` to impose a lower destination limit.
 
 ## Read and verify
 
