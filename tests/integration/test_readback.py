@@ -59,7 +59,6 @@ def test_dataset_reads_from_the_configured_schema(mock_config, pipeline_factory)
     events_query = "SELECT id FROM events ORDER BY id"
     expected_rows = [(1,), (2,), (3,), (4,), (5,)]
 
-    assert pipeline.dataset_name != mock_config.dataset_name
     assert dataset.events.select("id").order_by("id").fetchall() == expected_rows
     assert dataset(events_query, _execute_raw_query=True).fetchall() == expected_rows
 

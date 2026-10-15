@@ -21,14 +21,13 @@ Set `.dlt/secrets.toml`:
 [destination.altertable]
 host = "api.altertable.ai"
 catalog = "lakehouse"
-dataset_name = "crm"
 username = "..."
 password = "..."
 ```
 
 Use the HTTP API host. Defaults: HTTPS, port 443, compute size `XS`.
-Set `dataset_name` on the destination. dlt's pipeline setting is ignored.
 The catalog must exist. Schemas are created automatically.
+The pipeline's `dataset_name` is the schema, defaulting to `ALTERTABLE_SCHEMA`.
 
 Settings also accept dlt environment variables (`DESTINATION__ALTERTABLE__HOST`, etc.),
 existing `ALTERTABLE_*` credentials, or arguments to `altertable(...)`.
@@ -53,7 +52,7 @@ def contacts():
     ]
 
 
-pipeline = dlt.pipeline(pipeline_name="crm", destination=altertable)
+pipeline = dlt.pipeline(pipeline_name="crm", destination=altertable, dataset_name="crm")
 pipeline.run(contacts())
 ```
 

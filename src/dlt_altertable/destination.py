@@ -17,7 +17,7 @@ from dlt.common.schema.utils import (
 from dlt.destinations.impl.destination.factory import destination as CustomDestination
 
 from dlt_altertable import api as altertable_api
-from dlt_altertable.configuration import AltertableClientConfiguration
+from dlt_altertable.configuration import DATASET_NAME_HINT, AltertableClientConfiguration
 from dlt_altertable.table_schema import aligned_parquet, create_or_evolve_table
 
 if TYPE_CHECKING:
@@ -158,6 +158,10 @@ class altertable(CustomDestination):
         for name, value in options.items():
             if name in kwargs and kwargs[name] != value:
                 raise ConfigurationValueError(f"altertable does not support overriding {name}.")
+        if "dataset_name" in kwargs:
+            raise ConfigurationValueError(
+                f"altertable does not take dataset_name. {DATASET_NAME_HINT}"
+            )
         super().__init__(
             destination_name=destination_name,
             naming_convention=naming_convention,
