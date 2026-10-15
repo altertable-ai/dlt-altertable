@@ -239,3 +239,23 @@ def test_drop_data_refresh_restores_the_preserved_schema(pipeline_factory, monke
 
     assert restored.default_schema.stored_version_hash == old_schema_hash
     assert restored.dataset().events.select("id", "label").fetchall() == [(2, None)]
+
+
+def test_replaced_table_publishes_descriptions_with_sql_characters(pipeline_factory) -> None:
+    pipeline = pipeline_factory("descriptions")
+    description = "Customer's id;\nsee the CRM"
+    pipeline.run(
+        dlt.resource(
+            [{"id": 1}],
+            name="snapshots",
+            write_disposition="replace",
+            columns={"id": {"data_type": "bigint", "description": description}},
+        )
+    )
+
+    with pipeline.sql_client() as sql_client:
+        assert sql_client.execute_sql(
+            "SELECT comment FROM duckdb_columns() "
+            f"WHERE schema_name = '{pipeline.dataset_name}' "
+            "AND table_name = 'snapshots' AND column_name = 'id'"
+        ) == [(description,)]

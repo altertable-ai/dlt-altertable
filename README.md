@@ -100,6 +100,12 @@ pipeline.run(resource)
 
 Pass `partition=[]` to reset. Sort hints are not supported yet.
 
+## Descriptions
+
+Table and column `description` hints, such as `columns={"id": {"description": "Order id"}}`,
+become comments in the Altertable catalog. Column comments track changes. Table comments are
+set on create or replace.
+
 ## Performance
 
 Override defaults with [dlt configuration](https://dlthub.com/docs/reference/performance):

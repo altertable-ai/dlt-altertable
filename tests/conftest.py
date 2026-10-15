@@ -127,7 +127,7 @@ class FakeServer:
                 ]
             )
         if statement.startswith("SELECT column_name, data_type"):
-            return query_response([[column, "BIGINT"] for column in self.existing_columns])
+            return query_response([[column, "BIGINT", None] for column in self.existing_columns])
         return query_response([[column] for column in self.existing_columns])
 
     def post(
