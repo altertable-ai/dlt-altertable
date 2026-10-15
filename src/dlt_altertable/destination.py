@@ -18,7 +18,7 @@ from dlt.destinations.impl.destination.factory import destination as CustomDesti
 
 from dlt_altertable import api as altertable_api
 from dlt_altertable.configuration import AltertableClientConfiguration
-from dlt_altertable.table_schema import aligned_parquet, create_or_evolve_table
+from dlt_altertable.table_schema import aligned_parquet, apply_descriptions, create_or_evolve_table
 
 if TYPE_CHECKING:
     from dlt_altertable.job_client import AltertableJobClient
@@ -134,6 +134,8 @@ def _upload(
 
     if ingest_mode == "overwrite":
         already_replaced.append(table_name)
+        # The overwrite recreates the table from the file, which carries no comments.
+        apply_descriptions(config, table, {})
 
 
 class altertable(CustomDestination):

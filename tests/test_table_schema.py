@@ -7,6 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 from dlt.common.schema import TTableSchema
 
+import dlt_altertable.api
 from dlt_altertable.destination import _upload
 from tests.conftest import make_config
 
@@ -99,3 +100,67 @@ def test_uint64_file_widens_a_column_after_the_schema_lookup_is_cached(
     assert connection.execute(
         "SELECT value FROM lakehouse.raw.numbers ORDER BY value"
     ).fetchall() == [(-1,), (2**64 - 1,)]
+
+
+@pytest.mark.ducklake
+def test_pipeline_publishes_descriptions_as_catalog_comments(
+    connection: "duckdb.DuckDBPyConnection",
+    local_pipeline: dlt.Pipeline,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    execute = dlt_altertable.api.execute_sql
+    requests: list[str] = []
+    monkeypatch.setattr(
+        dlt_altertable.api,
+        "execute_sql",
+        lambda config, statement: requests.append(statement) or execute(config, statement),
+    )
+
+    def column_comment(table_name: str, column_name: str) -> list[tuple[str | None]]:
+        return connection.execute(
+            "SELECT comment FROM duckdb_columns() WHERE table_name = ? AND column_name = ?",
+            [table_name, column_name],
+        ).fetchall()
+
+    def run(amount_description: str) -> None:
+        local_pipeline.run(
+            dlt.resource(
+                [{"id": 1, "total_amount": 2.5}],
+                name="orders",
+                columns={
+                    "id": {"data_type": "bigint", "description": "Customer's order id"},
+                    "total_amount": {"data_type": "double", "description": amount_description},
+                },
+            )
+        )
+
+    run("Gross, in EUR")
+    assert column_comment("orders", "id") == [("Customer's order id",)]
+    assert column_comment("orders", "total_amount") == [("Gross, in EUR",)]
+    assert connection.execute(
+        "SELECT comment FROM duckdb_tables() WHERE table_name = '_dlt_loads'"
+    ).fetchall() == [(local_pipeline.default_schema.tables["_dlt_loads"]["description"],)]
+    requests.clear()
+    run("Gross, in EUR")
+    assert not any("COMMENT ON" in request for request in requests)
+    run("Net, in EUR")
+    assert column_comment("orders", "total_amount") == [("Net, in EUR",)]
+
+
+@pytest.mark.ducklake
+def test_replaced_tables_keep_their_comments(
+    connection: "duckdb.DuckDBPyConnection", local_pipeline: dlt.Pipeline
+) -> None:
+    for snapshot in [1, 2]:
+        local_pipeline.run(
+            dlt.resource(
+                [{"id": snapshot}],
+                name="snapshots",
+                write_disposition="replace",
+                columns={"id": {"description": "Snapshot id"}},
+            )
+        )
+
+    assert connection.execute(
+        "SELECT comment FROM duckdb_columns() WHERE table_name = 'snapshots' AND column_name = 'id'"
+    ).fetchall() == [("Snapshot id",)]

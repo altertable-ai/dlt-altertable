@@ -1,6 +1,6 @@
 import os
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import cast
 
@@ -79,6 +79,30 @@ def apply_partitioning(
     )
 
 
+def apply_descriptions(
+    config: AltertableClientConfiguration,
+    table: TTableSchema | PreparedTableSchema,
+    current_comments: Mapping[str | None, str | None],
+) -> None:
+    """Catalog comments are what agents browsing the lakehouse read, so dlt descriptions
+    are published there. Only changed ones are written, in one transaction, because every
+    COMMENT otherwise commits its own snapshot. The None key holds the table comment."""
+    table_name = qualified_table_name(config, cast(str, table["name"]))
+    targets = {None: (f"TABLE {table_name}", table.get("description"))} | {
+        name: (f"COLUMN {table_name}.{escape_postgres_identifier(name)}", column.get("description"))
+        for name, column in table["columns"].items()
+    }
+    statements = [
+        f"COMMENT ON {target} IS {escape_duckdb_literal(description)};"
+        for name, (target, description) in targets.items()
+        if description and description != current_comments.get(name)
+    ]
+    if statements:
+        altertable_api.execute_sql(
+            config, "\n".join(["BEGIN TRANSACTION;", *statements, "COMMIT;"])
+        )
+
+
 def create_table(
     config: AltertableClientConfiguration,
     table: TTableSchema | PreparedTableSchema,
@@ -98,6 +122,7 @@ def create_table(
         f"CREATE TABLE IF NOT EXISTS {qualified_table_name(config, table_name)} ({columns})",
     )
     apply_partitioning(config, table)
+    apply_descriptions(config, table, {})
     logger.info(
         f"Created table {config.catalog}.{config.dataset_name}.{table_name} "
         f"with {len(table['columns'])} columns"
@@ -124,12 +149,14 @@ def create_or_evolve_table(
     table_name = cast(str, table["name"])
     rows = altertable_api.execute_sql(
         config,
-        "SELECT column_name, data_type FROM information_schema.columns "
+        "SELECT column_name, data_type, column_comment, table_comment "
+        "FROM information_schema.columns JOIN information_schema.tables "
+        "USING (table_catalog, table_schema, table_name) "
         f"WHERE table_catalog = {escape_duckdb_literal(config.catalog)} "
         f"AND table_schema = {escape_duckdb_literal(config.dataset_name)} "
         f"AND table_name = {escape_duckdb_literal(table_name)}",
     )
-    existing = dict(rows)
+    existing = {name: data_type for name, data_type, _, _ in rows}
     if not existing:
         create_table(config, table, column_types)
         return False
@@ -150,6 +177,9 @@ def create_or_evolve_table(
                 f"ALTER COLUMN {escape_postgres_identifier(name)} TYPE DECIMAL(20,0)",
             )
     apply_partitioning(config, table)
+    apply_descriptions(
+        config, table, {name: comment for name, _, comment, _ in rows} | {None: rows[0][3]}
+    )
     return True
 
 

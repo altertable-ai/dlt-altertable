@@ -98,6 +98,12 @@ pipeline.run(resource)
 
 Pass `partition=[]` to reset. Sort hints are not supported yet.
 
+## Descriptions
+
+Table and column `description` hints, such as `columns={"id": {"description": "Order id"}}`,
+become Altertable comments that people and agents see in the catalog. Changed descriptions
+update their comment on the next load; removing one keeps the last comment.
+
 ## Performance
 
 Override defaults with [dlt configuration](https://dlthub.com/docs/reference/performance):

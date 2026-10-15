@@ -113,6 +113,10 @@ class FakeServer:
             return query_response([{"error": self.query_error}])
         if statement.startswith(("ALTER", "CREATE")):
             return query_response([])
+        if statement.startswith("SELECT column_name, data_type"):
+            return query_response(
+                [[column, "BIGINT", None, None] for column in self.existing_columns]
+            )
         if "information_schema.tables" in statement:
             landed = {upload.params["table"] for upload in self.uploads}
             return query_response([[t] for t in sorted(landed)])
@@ -125,8 +129,6 @@ class FakeServer:
                     if name not in excluded
                 ]
             )
-        if statement.startswith("SELECT column_name, data_type"):
-            return query_response([[column, "BIGINT"] for column in self.existing_columns])
         return query_response([[column] for column in self.existing_columns])
 
     def post(
