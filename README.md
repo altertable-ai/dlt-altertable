@@ -134,8 +134,15 @@ Use `refresh="drop_resources"` to drop and recreate selected resource tables and
 Use `refresh="drop_data"` to clear their rows and reset their state while preserving the schema.
 
 - Fresh runners restore incremental state with the same pipeline name, catalog, and schema.
-  Persist `pipelines_dir` to resume unfinished loads.
-- Keep the one-hour upload timeout: a timed-out request can still complete on the server.
+  Persist `pipelines_dir` to resume unfinished loads with `pipeline.load()`.
+- Queries and uploads wait up to one hour between response bytes. Set `request_timeout` in
+  `[destination.altertable]`, `DESTINATION__ALTERTABLE__REQUEST_TIMEOUT`, or
+  `altertable(request_timeout=7200)` to change this interval in seconds. This does not extend
+  server-side execution or session limits.
+- Transport failures and transient server errors retain their original cause and use
+  [dlt's load-job retry policy](https://dlthub.com/docs/running-in-production/running#configure-the-internal-job-retry).
+  Requests are not retried inside the HTTP client. A timed-out write can still commit on the
+  server, so retrying an append can duplicate rows.
 
 ## Develop
 

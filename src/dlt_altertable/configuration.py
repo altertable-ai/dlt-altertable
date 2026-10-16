@@ -1,5 +1,6 @@
 import dataclasses
 import os
+from math import isfinite
 from typing import Annotated, cast
 
 from dlt.common.configuration import ConfigurationValueError, configspec
@@ -36,9 +37,14 @@ class AltertableClientConfiguration(
     port: int | None = None
     tls: bool | None = None
     compute_size: str | None = None
+    request_timeout: float = 3600.0
     allow_destructive_refresh: bool = False
 
     def on_resolved(self) -> None:
+        if not isfinite(self.request_timeout) or self.request_timeout <= 0:
+            raise ConfigurationValueError(
+                "request_timeout must be a positive, finite number of seconds."
+            )
         for parameter, env_var in ENV_FALLBACKS.items():
             value = getattr(self, parameter) or os.environ.get(env_var)
             if not value:

@@ -7,6 +7,7 @@ from typing import Any
 import dlt
 import pyarrow as pa
 import pytest
+import requests
 from dlt.common.schema.exceptions import SchemaIdentifierNormalizationCollision
 from dlt.pipeline.exceptions import PipelineStepFailed
 
@@ -224,6 +225,72 @@ def test_load_retries_only_transient_database_errors(
     assert without_lineage(
         [row for upload in server.uploads_for("events") for row in upload.rows]
     ) == ([{"id": 1}] if retryable else [])
+
+
+@pytest.mark.parametrize(
+    ("source", "read_timeout"),
+    [("default", 3600.0), ("argument", 7200.0), ("environment", 9000.0)],
+)
+def test_query_and_upload_timeouts_follow_destination_configuration(
+    server, run_pipeline, monkeypatch, source, read_timeout
+):
+    options = {}
+    if source == "argument":
+        options["request_timeout"] = read_timeout
+    elif source == "environment":
+        monkeypatch.setenv("DESTINATION__ALTERTABLE__REQUEST_TIMEOUT", str(read_timeout))
+    post = server.post
+    timeouts = {"query": set(), "upload": set()}
+
+    def record_timeout(url, **kwargs):
+        operation = "query" if url.endswith("/query") else "upload"
+        timeouts[operation].add(kwargs["timeout"])
+        return post(url, **kwargs)
+
+    monkeypatch.setattr(server, "post", record_timeout)
+
+    run_pipeline(appended_events(), **options)
+
+    assert timeouts == {"query": {(10, read_timeout)}, "upload": {(30, read_timeout)}}
+
+
+@pytest.mark.parametrize("write_disposition", ["append", "replace", "merge"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        requests.ReadTimeout("timed out waiting for upload response"),
+        requests.ConnectionError("worker disconnected"),
+        requests.exceptions.ChunkedEncodingError("upload response interrupted"),
+    ],
+)
+def test_dlt_retries_transport_failures_with_the_complete_file(
+    server, run_pipeline, monkeypatch, write_disposition, error
+):
+    post = server.post
+    attempts = 0
+    first_body = None
+
+    def fail_first_upload(url, **kwargs):
+        nonlocal attempts, first_body
+        if kwargs.get("params", {}).get("table") == "events":
+            attempts += 1
+            if attempts == 1:
+                first_body = kwargs["data"].read()
+                raise error
+        return post(url, **kwargs)
+
+    monkeypatch.setattr(server, "post", fail_first_upload)
+    resource = dlt.resource(
+        [{"id": 1}], name="events", primary_key="id", write_disposition=write_disposition
+    )
+
+    run_pipeline(resource)
+
+    assert attempts == 2
+    uploads = server.uploads_for("events")
+    assert len(uploads) == 1
+    assert uploads[0].body == first_body
+    assert without_lineage(uploads[0].rows) == [{"id": 1}]
 
 
 def test_replace_resumes_as_append_after_a_failed_file(

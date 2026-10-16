@@ -516,6 +516,12 @@ def test_configuration_falls_back_to_the_altertable_environment_variables(
     assert config.dataset_name == "crm"
 
 
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
+def test_invalid_request_timeout_is_a_configuration_error(timeout: float) -> None:
+    with pytest.raises(ConfigurationValueError, match="request_timeout"):
+        make_config(request_timeout=timeout)
+
+
 def test_missing_configuration_is_terminal_and_names_every_surface() -> None:
     config = AltertableClientConfiguration()
 

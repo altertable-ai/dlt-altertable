@@ -11,8 +11,6 @@ from requests.utils import default_user_agent
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.exceptions import TRANSPORT_ERRORS, make_database_exception
 
-UPLOAD_TIMEOUT = (30, 3600)
-QUERY_TIMEOUT = (10, 300)
 UPLOAD_WRITE_BLOCK_BYTES = 1 << 20
 LOADER_WORKERS = 20
 
@@ -58,7 +56,7 @@ def post_query(
             f"{config.base_url}/query",
             json=payload,
             auth=config.basic_auth,
-            timeout=QUERY_TIMEOUT,
+            timeout=(10, config.request_timeout),
         )
     except TRANSPORT_ERRORS as ex:
         raise make_database_exception(ex) from ex
@@ -109,7 +107,7 @@ def post_parquet(
                 data=parquet_file,
                 auth=config.basic_auth,
                 headers={"Content-Type": "application/parquet"},
-                timeout=UPLOAD_TIMEOUT,
+                timeout=(30, config.request_timeout),
             )
         except TRANSPORT_ERRORS as ex:
             raise make_database_exception(ex) from ex
