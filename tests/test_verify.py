@@ -79,6 +79,34 @@ def test_an_append_load_counts_only_the_rows_it_wrote(
 
 
 @pytest.mark.ducklake
+@pytest.mark.parametrize(
+    ("merge_option", "second_region"),
+    [({"skip_unchanged_rows": True}, "eu"), ({"source_filter": "region = 'eu'"}, "us")],
+    ids=["unchanged", "filtered_out"],
+)
+def test_a_merge_that_intentionally_changes_nothing_is_not_a_mismatch(
+    connection: "duckdb.DuckDBPyConnection",
+    local_pipeline: dlt.Pipeline,
+    merge_option: dict[str, Any],
+    second_region: str,
+) -> None:
+    def deals(region: str) -> Any:
+        return dlt.resource(
+            [{"id": 1, "region": region, "items": ["keep"]}],
+            name="deals",
+            primary_key="id",
+            max_table_nesting=1,
+            write_disposition={"disposition": "merge", **merge_option},
+        )
+
+    local_pipeline.run(deals("eu"))
+    local_pipeline.run(deals(second_region))
+
+    assert connection.execute("SELECT region FROM lakehouse.raw.deals").fetchall() == [("eu",)]
+    assert verify_load(local_pipeline) == []
+
+
+@pytest.mark.ducklake
 def test_a_row_count_that_misses_what_dlt_normalized_is_reported(
     connection: "duckdb.DuckDBPyConnection", local_pipeline: dlt.Pipeline
 ) -> None:

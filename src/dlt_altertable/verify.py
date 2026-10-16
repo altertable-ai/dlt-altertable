@@ -106,7 +106,7 @@ def load_context(
 ) -> tuple[LoadInfo, dict[str, int] | None, AltertableClientConfiguration]:
     trace = pipeline.last_trace
     load_info = trace.last_load_info if trace is not None else None
-    if load_info is None or not load_info.loads_ids:
+    if trace is None or load_info is None or not load_info.loads_ids:
         raise ValueError(
             "verify_load reads the load step of a pipeline.run() from the pipeline trace, "
             "and found none."
@@ -142,12 +142,14 @@ def table_contract(
     key_columns = primary_key_columns(table) if disposition in (MERGE, REPLACE) else []
     if table.get("parent") and disposition in (MERGE, REPLACE):
         key_columns = get_columns_names_with_prop(table, "row_key")
-    upsert_skips_stale_rows = disposition == MERGE and bool(
+    upsert_may_skip_rows = disposition == MERGE and bool(
         get_dedup_sort_tuple(table)
         or has_column_with_prop(table, "hard_delete")
         or table.get("parent")
+        or table.get("x-merge-skip-unchanged-rows")
+        or table.get("x-merge-source-filter")
     )
-    return disposition, key_columns, upsert_skips_stale_rows
+    return disposition, key_columns, upsert_may_skip_rows
 
 
 def table_load_predicate(
@@ -207,7 +209,7 @@ def count_problems(
     key_columns: list[str],
     normalized_rows: int | None,
     lakehouse_counts: list[Any],
-    upsert_skips_stale_rows: bool,
+    upsert_may_skip_rows: bool,
 ) -> list[str]:
     row_count = lakehouse_counts[0]
     problems: list[str] = []
@@ -220,7 +222,7 @@ def count_problems(
     if normalized_rows is None:
         return problems
     nothing_landed_under_this_load_id = normalized_rows > 0 and row_count == 0
-    if disposition == MERGE and nothing_landed_under_this_load_id and not upsert_skips_stale_rows:
+    if disposition == MERGE and nothing_landed_under_this_load_id and not upsert_may_skip_rows:
         problems.append(
             f"{table_name}: dlt normalized {normalized_rows} rows, none landed with this load id"
         )
@@ -245,7 +247,7 @@ def verify_table(
     if table_name not in landed_table_names:
         return [f"{table_name}: the load includes this table, but it does not exist"]
 
-    disposition, key_columns, upsert_skips_stale_rows = contract
+    disposition, key_columns, upsert_may_skip_rows = contract
     if disposition != REPLACE and load_id_predicate is None:
         return [
             f"{table_name}: this table has no _dlt_load_id column, so this load cannot be "
@@ -271,7 +273,7 @@ def verify_table(
             key_columns,
             normalized_rows,
             lakehouse_counts,
-            upsert_skips_stale_rows,
+            upsert_may_skip_rows,
         )
     )
     return problems

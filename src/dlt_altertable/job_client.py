@@ -28,7 +28,10 @@ from dlt.common.storages.load_storage import ParsedLoadJobFileName
 from dlt.destinations.impl.destination.destination import DestinationClient
 from dlt.destinations.job_impl import DestinationParquetLoadJob
 from dlt.destinations.sql_client import WithSqlClient
-from dlt.destinations.utils import verify_schema_merge_disposition
+from dlt.destinations.utils import (
+    verify_schema_merge_disposition,
+    verify_unsupported_merge_options,
+)
 
 from dlt_altertable import api as altertable_api
 from dlt_altertable.configuration import DATASET_NAME_HINT, AltertableClientConfiguration
@@ -95,9 +98,19 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
             for column in table["columns"].values():
                 sql_type(column)
             partition_expressions(table)
-        if validation_errors := verify_schema_merge_disposition(
+        upserted_over_http = [
+            table for table in tables if not self._requires_staging(cast(str, table["name"]))
+        ]
+        validation_errors = verify_schema_merge_disposition(
             self.schema, tables, self.capabilities
-        ):
+        ) + verify_unsupported_merge_options(
+            self.schema,
+            upserted_over_http,
+            self.capabilities,
+            "altertable",
+            ("source_filter", "skip_unchanged_rows"),
+        )
+        if validation_errors:
             raise validation_errors[0]
         return tables
 

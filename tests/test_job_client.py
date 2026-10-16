@@ -56,6 +56,14 @@ def pipeline(tmp_path):
             {"columns": {"value": {"data_type": "decimal", "precision": 39, "scale": 0}}},
             "invalid decimal precision or scale",
         ),
+        (
+            {"write_disposition": {"disposition": "merge", "source_filter": "value > 0"}},
+            "source_filter",
+        ),
+        (
+            {"write_disposition": {"disposition": "merge", "skip_unchanged_rows": True}},
+            "skip_unchanged_rows",
+        ),
     ],
     ids=[
         "missing_primary_key",
@@ -69,6 +77,8 @@ def pipeline(tmp_path):
         "wei_append",
         "wei_replace",
         "decimal_precision",
+        "source_filter",
+        "skip_unchanged_rows",
     ],
 )
 def test_invalid_table_stops_the_load_before_any_table_is_written(server, pipeline, hints, message):

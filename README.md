@@ -9,7 +9,7 @@ Load data into [Altertable](https://altertable.ai) with [dlt](https://dlthub.com
 
 ## Install and configure
 
-Requires Python 3.12+ and `dlt >= 1.30, < 2`.
+Requires Python 3.12+ and `dlt >= 1.31, < 2`.
 
 ```bash
 uv add dlt-altertable

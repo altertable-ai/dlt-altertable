@@ -41,6 +41,9 @@ class MergeThenDeleteJob(SqlMergeFollowupJob):
         deleted_cond: str | None,
         insert_only: bool = False,
         not_deleted_cond: str | None = None,
+        changed_cond: str | None = None,
+        insert_cond: str | None = None,
+        source_filter: str | None = None,
     ) -> list[str]:
         statements = super().gen_upsert_merge_sql(
             root_table_name,
@@ -49,12 +52,20 @@ class MergeThenDeleteJob(SqlMergeFollowupJob):
             root_table_column_names,
             hard_delete_col=None,
             deleted_cond=None,
+            insert_only=insert_only,
+            not_deleted_cond=not_deleted_cond,
+            changed_cond=changed_cond,
+            insert_cond=insert_cond,
+            source_filter=source_filter,
         )
         if hard_delete_col:
             keys = ", ".join(primary_keys)
+            staged_deletes = deleted_cond
+            if source_filter:
+                staged_deletes = f"({deleted_cond}) AND ({source_filter})"
             statements.append(
                 f"DELETE FROM {root_table_name} WHERE ({keys}) IN "
-                f"(SELECT {keys} FROM {staging_root_table_name} WHERE {deleted_cond});"
+                f"(SELECT {keys} FROM {staging_root_table_name} WHERE {staged_deletes});"
             )
         return statements
 
