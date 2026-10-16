@@ -343,7 +343,7 @@ def test_destination_is_configurable_from_the_environment(
 ) -> None:
     monkeypatch.setenv("DESTINATION__ALTERTABLE__HOST", "flight.from-env")
     monkeypatch.setenv("DESTINATION__ALTERTABLE__CATALOG", "env_catalog")
-    monkeypatch.setenv("DESTINATION__ALTERTABLE__DATASET_NAME", "env_schema")
+    monkeypatch.setenv("DATASET_NAME", "env_schema")
     monkeypatch.setenv("DESTINATION__ALTERTABLE__PORT", "15002")
     monkeypatch.setenv("DESTINATION__ALTERTABLE__TLS", "false")
     monkeypatch.setenv("DESTINATION__ALTERTABLE__USERNAME", "env_user")
@@ -352,7 +352,6 @@ def test_destination_is_configurable_from_the_environment(
     pipeline = dlt.pipeline(
         pipeline_name="contract_env",
         destination=altertable,
-        dataset_name="raw",
         pipelines_dir=str(tmp_path / "dlt"),
     )
     pipeline.run(appended_events())

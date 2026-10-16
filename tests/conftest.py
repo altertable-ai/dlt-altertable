@@ -29,7 +29,6 @@ if TYPE_CHECKING:
 DESTINATION_OPTIONS = AltertableClientConfiguration(
     host="altertable.test",
     catalog="lakehouse",
-    dataset_name="raw",
     username="user",
     password="secret",
     port=15002,
@@ -40,7 +39,9 @@ BASE_URL = "http://altertable.test:15002"
 
 
 def make_config(**overrides: Any) -> AltertableClientConfiguration:
+    dataset_name = overrides.pop("dataset_name", "raw")
     config = AltertableClientConfiguration(**{**DESTINATION_OPTIONS, **overrides})
+    config.dataset_name = dataset_name
     config.on_resolved()
     return config
 
@@ -175,8 +176,9 @@ class FakeServer:
 
 @pytest.fixture(autouse=True)
 def isolated_altertable_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for suffix in ("HOST", "PORT", "TLS", "USERNAME", "PASSWORD", "CATALOG", "SCHEMA"):
+    for suffix in ("HOST", "PORT", "TLS", "USERNAME", "PASSWORD", "CATALOG"):
         monkeypatch.delenv(f"ALTERTABLE_{suffix}", raising=False)
+    monkeypatch.setenv("ALTERTABLE_SCHEMA", "raw")
 
 
 @pytest.fixture

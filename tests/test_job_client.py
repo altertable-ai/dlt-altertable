@@ -101,11 +101,10 @@ def test_drop_storage_previews_sql_without_sending_requests(server, pipeline, op
     assert server.statements == []
 
 
-def test_drop_storage_executes_only_when_explicitly_requested(server, pipeline):
+def test_drop_storage_executes_only_when_explicitly_requested(server, pipeline, monkeypatch):
+    monkeypatch.setenv("ALTERTABLE_SCHEMA", "raw.schema")
+    pipeline.destination.config_params.update(catalog='lake"house')
     with pipeline.destination_client() as client:
-        client.config.catalog = 'lake"house'
-        client.config.dataset_name = "raw.schema"
-
         client.drop_storage(dry_run=False)
 
     assert server.statements == ['DROP SCHEMA IF EXISTS "lake""house"."raw.schema" CASCADE']

@@ -1,8 +1,7 @@
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import dlt
 from dlt.common.data_writers.escape import escape_duckdb_literal, escape_postgres_identifier
-from dlt.common.destination.reference import AnyDestination_CO
 from dlt.common.pipeline import LoadInfo, NormalizeInfo
 from dlt.common.schema import TSchemaTables, TTableSchema
 from dlt.common.schema.typing import C_DLT_LOAD_ID, TWriteDisposition
@@ -19,6 +18,7 @@ from dlt.common.utils import merge_row_counts
 from dlt_altertable import api as altertable_api
 from dlt_altertable.configuration import AltertableClientConfiguration
 from dlt_altertable.destination import altertable, primary_key_columns
+from dlt_altertable.job_client import AltertableJobClient
 from dlt_altertable.table_schema import qualified_table_name
 
 MERGE: Final[TWriteDisposition] = "merge"
@@ -27,18 +27,10 @@ REPLACE: Final[TWriteDisposition] = "replace"
 DUCKLAKE_METADATA_PREFIX = "__ducklake_metadata_"
 
 
-def resolved_config(destination: AnyDestination_CO) -> AltertableClientConfiguration:
-    if not issubclass(destination.spec, AltertableClientConfiguration):
-        raise TypeError(
-            f"{destination.destination_type} is not an Altertable destination, so it has no "
-            "lakehouse to read a load back from"
-        )
-    return destination.configuration(destination.spec())
-
-
 def verify_catalog(**options: Any) -> list[str]:
     """Report why the configured catalog cannot be loaded into."""
-    config = resolved_config(altertable(**options))
+    destination = altertable(**options)
+    config = cast(AltertableClientConfiguration, destination.configuration(destination.spec()))
     attached = altertable_api.execute_sql(
         config,
         "SELECT database_name, readonly FROM duckdb_databases() "
@@ -123,7 +115,21 @@ def load_context(
         step.step_info for step in trace.steps if isinstance(step.step_info, NormalizeInfo)
     ]
     row_counts = normalized_row_counts(normalizations, load_info.loads_ids)
-    return load_info, row_counts, resolved_config(pipeline.destination)
+    configs = []
+    for package in load_info.load_packages:
+        client = pipeline.destination_client(schema_name=package.schema.name)
+        if not isinstance(client, AltertableJobClient):
+            raise TypeError(
+                f"{pipeline.destination.destination_type} is not an Altertable destination, "
+                "so it has no lakehouse to read a load back from"
+            )
+        configs.append(client.dataset_config)
+    if len({config.dataset_name for config in configs}) > 1:
+        raise ValueError(
+            "verify_load cannot reconcile a load spanning multiple datasets. "
+            "Use a separate pipeline per dataset to verify these loads."
+        )
+    return load_info, row_counts, configs[0]
 
 
 def table_contract(

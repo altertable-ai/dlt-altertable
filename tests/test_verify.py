@@ -308,7 +308,9 @@ def test_a_trace_without_a_load_says_so(tmp_path: Path, extract_first: bool) -> 
 
 
 @pytest.mark.usefixtures("server")
-def test_a_catalog_a_load_can_reach_reports_nothing() -> None:
+def test_a_catalog_a_load_can_reach_reports_nothing_without_a_dataset(monkeypatch) -> None:
+    monkeypatch.delenv("ALTERTABLE_SCHEMA")
+
     assert verify_catalog(**DESTINATION_OPTIONS) == []
 
 

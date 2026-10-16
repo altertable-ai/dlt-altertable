@@ -29,8 +29,8 @@ def mock_config() -> Iterator[AltertableClientConfiguration]:
         username=os.environ.get("DLT_ALTERTABLE_MOCK_USERNAME", "integration"),
         password=os.environ.get("DLT_ALTERTABLE_MOCK_PASSWORD", "integration"),
         catalog="memory",
-        dataset_name=f"dlt_integration_{uuid4().hex}",
     )
+    config.dataset_name = f"dlt_integration_{uuid4().hex}"
     config.on_resolved()
     try:
         yield config
@@ -54,9 +54,9 @@ def pipeline_factory(
                 username=mock_config.username,
                 password=mock_config.password,
                 catalog=mock_config.catalog,
-                dataset_name=mock_config.dataset_name,
                 **destination_options,
             ),
+            dataset_name=mock_config.dataset_name,
             pipelines_dir=str(tmp_path / directory),
         )
 

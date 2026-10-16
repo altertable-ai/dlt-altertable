@@ -1,27 +1,36 @@
+import dataclasses
 import os
-from typing import cast
+from typing import Annotated, cast
 
 from dlt.common.configuration import ConfigurationValueError, configspec
+from dlt.common.configuration.specs.base_configuration import NotResolved
+from dlt.common.destination.client import DestinationClientDwhConfiguration
 from dlt.common.typing import TSecretStrValue
 from dlt.destinations.impl.destination.configuration import CustomDestinationClientConfiguration
 
 ENV_FALLBACKS = {
     "host": "ALTERTABLE_HOST",
     "catalog": "ALTERTABLE_CATALOG",
-    "dataset_name": "ALTERTABLE_SCHEMA",
     "username": "ALTERTABLE_USERNAME",
     "password": "ALTERTABLE_PASSWORD",
 }
+DATASET_NAME_HINT = (
+    "Set dataset_name on dlt.pipeline(), run(), or load(), or export ALTERTABLE_SCHEMA."
+)
 
 
 @configspec
-class AltertableClientConfiguration(CustomDestinationClientConfiguration):
+class AltertableClientConfiguration(
+    CustomDestinationClientConfiguration, DestinationClientDwhConfiguration
+):
     """Falls back to the `ALTERTABLE_*` environment variables after dlt's own providers,
     so a preconfigured environment needs no explicit destination configuration."""
 
+    dataset_name: Annotated[str | None, NotResolved()] = dataclasses.field(
+        default=None, init=False, repr=False, compare=False
+    )
     host: str | None = None
     catalog: str | None = None
-    dataset_name: str | None = None
     username: str | None = None
     password: TSecretStrValue | None = None
     port: int | None = None
@@ -39,6 +48,8 @@ class AltertableClientConfiguration(CustomDestinationClientConfiguration):
                     f"{env_var}."
                 )
             setattr(self, parameter, value)
+        if self.dataset_name is None:
+            self.dataset_name = os.environ.get("ALTERTABLE_SCHEMA")
         if self.port is None:
             self.port = int(os.environ.get("ALTERTABLE_PORT", "443"))
         if self.tls is None:
