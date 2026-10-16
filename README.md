@@ -66,7 +66,7 @@ pipeline.run(contacts())
 
 Merge requires a non-nullable primary key. In the example, `dedup_sort` keeps the highest
 `lastmodifieddate` per `id`, comparing incoming and stored rows. `delete-insert`, `insert-only`, `scd2`,
-`merge_key`, and ascending `dedup_sort` are unsupported.
+`cdc`, `merge_key`, and ascending `dedup_sort` are unsupported.
 
 New columns are added automatically. Nested data defaults to JSON strings (`max_table_nesting=0`). Set
 `altertable(naming_convention="snake_case", max_table_nesting=None)` to flatten objects into columns
@@ -76,6 +76,9 @@ Nested merges replace children and require one root per primary key per load.
 With child tables or `hard_delete`, send complete records when inserting or updating:
 omitted fields become null and omitted lists are cleared.
 Flat merges without `hard_delete` preserve columns absent from incoming files.
+
+`source_filter` and `skip_unchanged_rows` require child tables or a `hard_delete` column hint.
+Flat merges without `hard_delete` reject these options before writing any tables.
 
 Use `columns={"deleted": {"hard_delete": True}}` to delete records and their children
 ([dlt deletion rules](https://dlthub.com/docs/general-usage/merge-loading#delete-records)).
