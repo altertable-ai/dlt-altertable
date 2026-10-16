@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.2.0...dlt-altertable-v0.2.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* support dlt 1.31 merges ([#34](https://github.com/altertable-ai/dlt-altertable/issues/34)) ([9ab0d1b](https://github.com/altertable-ai/dlt-altertable/commit/9ab0d1baaecc29e1871e48de8e969862a13a1d4b))
+
 ## [0.2.0](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.1.6...dlt-altertable-v0.2.0) (2026-10-16)
 
 
