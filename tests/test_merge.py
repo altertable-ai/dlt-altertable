@@ -229,6 +229,49 @@ def test_hard_delete_uses_the_latest_cursor_across_files_and_existing_rows(
 
 
 @pytest.mark.ducklake
+def test_a_filtered_hard_delete_merge_leaves_excluded_parents_and_children(
+    connection: "duckdb.DuckDBPyConnection", local_pipeline: dlt.Pipeline
+) -> None:
+    def eu_deals(rows: list[dict[str, Any]]) -> DltResource:
+        return dlt.resource(
+            rows,
+            name="deals",
+            primary_key="id",
+            max_table_nesting=1,
+            columns={"deleted": {"hard_delete": True}},
+            write_disposition={"disposition": "merge", "source_filter": "region = 'eu'"},
+        )
+
+    local_pipeline.run(
+        eu_deals(
+            [
+                {"id": 1, "region": "eu", "deleted": False, "items": ["delete"]},
+                {"id": 2, "region": "eu", "deleted": False, "items": ["keep"]},
+                {"id": 3, "region": "eu", "deleted": False, "items": ["old"]},
+            ]
+        )
+    )
+    local_pipeline.run(
+        eu_deals(
+            [
+                {"id": 1, "region": "eu", "deleted": True, "items": []},
+                {"id": 2, "region": "us", "deleted": True, "items": ["ignored"]},
+                {"id": 3, "region": "eu", "deleted": False, "items": ["new"]},
+                {"id": 4, "region": "us", "deleted": False, "items": ["ignored"]},
+            ]
+        )
+    )
+
+    assert connection.execute("SELECT id FROM lakehouse.raw.deals ORDER BY id").fetchall() == [
+        (2,),
+        (3,),
+    ]
+    assert connection.execute(
+        "SELECT value FROM lakehouse.raw.deals__items ORDER BY value"
+    ).fetchall() == [("keep",), ("new",)]
+
+
+@pytest.mark.ducklake
 def test_nested_merge_does_not_apply_children_of_a_stale_parent(
     local_pipeline: dlt.Pipeline, connection: "duckdb.DuckDBPyConnection"
 ) -> None:

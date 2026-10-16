@@ -18,7 +18,7 @@ classifiers = [
 requires-python = ">=3.12"
 
 dependencies = [
-    "dlt[parquet]~=1.30",
+    "dlt[parquet]~=1.31",
     "pyarrow>=15.0.0",
     "requests>=2.26",
     "urllib3>=2",
