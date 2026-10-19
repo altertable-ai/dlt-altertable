@@ -164,6 +164,33 @@ def test_replace_is_reissued_when_the_first_attempt_fails(server: FakeServer, ru
     assert [upload.params["mode"] for upload in server.uploads_for("deals")] == ["overwrite"]
 
 
+def test_replace_is_reissued_when_its_comments_fail(
+    server: FakeServer, run_pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    post = server.post
+    failures = 1
+
+    def fail_first_deals_comment(url, **kwargs):
+        nonlocal failures
+        statement = kwargs.get("json", {}).get("statement", "")
+        if failures and "COMMENT ON" in statement and '"deals"' in statement:
+            failures -= 1
+            return FakeResponse(503, "no compute capacity")
+        return post(url, **kwargs)
+
+    monkeypatch.setattr(server, "post", fail_first_deals_comment)
+    deals = replaced_deals()
+    deals.apply_hints(columns={"id": {"description": "Deal id"}})
+
+    run_pipeline(deals)
+
+    assert failures == 0
+    assert [upload.params["mode"] for upload in server.uploads_for("deals")] == [
+        "overwrite",
+        "overwrite",
+    ]
+
+
 def test_transient_failures_exhaust_after_five_attempts(server: FakeServer, run_pipeline) -> None:
     server.transient_upload_failures = 99
 
