@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.2.1...dlt-altertable-v0.2.2) (2026-10-19)
+
+
+### Features
+
+* persist dlt descriptions as catalog comments ([#36](https://github.com/altertable-ai/dlt-altertable/issues/36)) ([72daa03](https://github.com/altertable-ai/dlt-altertable/commit/72daa039fbc7ec66bf4045250e9c89745ad34766))
+
 ## [0.2.1](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.2.0...dlt-altertable-v0.2.1) (2026-10-16)
 
 
