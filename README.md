@@ -5,7 +5,13 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-3776AB.svg)](https://www.python.org)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-Load data into [Altertable](https://altertable.ai) with [dlt](https://dlthub.com).
+Load [dlt](https://dlthub.com) sources into the [Altertable](https://altertable.ai) lakehouse,
+then [query them](https://altertable.ai/docs/lakehouse/sql-engine) or read them back from Python.
+
+- **Upsert merges**: by primary key, with child tables and hard deletes.
+- **Schema evolution**: new columns appear automatically; descriptions become catalog comments.
+- **Resumable runs**: incremental state survives fresh runners.
+- **Verified loads**: `verify_load` reads the last load back and reports problems.
 
 ## Install and configure
 
@@ -25,14 +31,21 @@ username = "..."
 password = "..."
 ```
 
-Use the HTTP API host. Defaults: HTTPS, port 443, compute size `XS`.
-The catalog must exist. Schemas are created automatically.
-The pipeline's `dataset_name` is the schema, defaulting to `ALTERTABLE_SCHEMA`.
+| Setting | Fallback variable | Default |
+| --- | --- | --- |
+| `host` | `ALTERTABLE_HOST` | Required, the HTTP API host |
+| `catalog` | `ALTERTABLE_CATALOG` | Required, must exist |
+| `username`, `password` | `ALTERTABLE_USERNAME`, `ALTERTABLE_PASSWORD` | Required |
+| `port` | `ALTERTABLE_PORT` | `443` |
+| `tls` | `ALTERTABLE_TLS` | `true` |
+| `compute_size` | `ALTERTABLE_COMPUTE_SIZE` | `XS` |
+| `allow_destructive_refresh` | | `false` |
 
-Settings also accept dlt environment variables (`DESTINATION__ALTERTABLE__HOST`, etc.),
-existing `ALTERTABLE_*` credentials, or arguments to `altertable(...)`.
+Settings also accept dlt environment variables (`DESTINATION__ALTERTABLE__HOST`, etc.) or
+arguments to `altertable(...)`. The pipeline's `dataset_name` is the schema, defaulting to
+`ALTERTABLE_SCHEMA`. Schemas are created automatically.
 
-## Use
+## Quickstart
 
 ```python
 import dlt
@@ -54,6 +67,7 @@ def contacts():
 
 pipeline = dlt.pipeline(pipeline_name="crm", destination=altertable, dataset_name="crm")
 pipeline.run(contacts())
+print(pipeline.dataset().contacts.arrow())
 ```
 
 ## Loading
@@ -68,7 +82,7 @@ Merge requires a non-nullable primary key. In the example, `dedup_sort` keeps th
 `lastmodifieddate` per `id`, comparing incoming and stored rows. `delete-insert`, `insert-only`, `scd2`,
 `cdc`, `merge_key`, and ascending `dedup_sort` are unsupported.
 
-New columns are added automatically. Nested data defaults to JSON strings (`max_table_nesting=0`). Set
+Nested data defaults to JSON strings (`max_table_nesting=0`). Set
 `altertable(naming_convention="snake_case", max_table_nesting=None)` to flatten objects into columns
 and lists into child tables.
 
@@ -78,13 +92,11 @@ omitted fields become null and omitted lists are cleared.
 Flat merges without `hard_delete` preserve columns absent from incoming files.
 
 `source_filter` and `skip_unchanged_rows` require child tables or a `hard_delete` column hint.
-Flat merges without `hard_delete` reject these options before writing any tables.
 
 Use `columns={"deleted": {"hard_delete": True}}` to delete records and their children
 ([dlt deletion rules](https://dlthub.com/docs/general-usage/merge-loading#delete-records)).
 
-Append and replace commit one file at a time. Replacement recreates the table on its first
-file, then appends the rest. Retried appends can duplicate rows. Do not set
+Append and replace commit one file at a time. Retried appends can duplicate rows. Do not set
 `LOAD__PARALLELISM_STRATEGY=parallel`: replacement requires sequential files per table.
 
 ## Partitioning
