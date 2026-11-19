@@ -220,7 +220,13 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
         include_existing_tables: bool = False,
     ) -> TSchemaTables | None:
         update = super().update_stored_schema(only_tables or (), expected_update or {}, force)
-        if self.get_stored_schema_by_hash(self.schema.stored_version_hash) is None:
+        rows = altertable_api.execute_sql(
+            self.dataset_config,
+            "SELECT 1 FROM "
+            f"{qualified_table_name(self.dataset_config, self.schema.version_table_name)} "
+            f"WHERE version_hash = {escape_duckdb_literal(self.schema.stored_version_hash)}",
+        )
+        if not rows:
             schema_insert_sql = self._insert_statement(
                 self.schema.version_table_name,
                 {

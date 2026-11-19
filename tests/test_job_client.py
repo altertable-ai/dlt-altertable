@@ -289,6 +289,27 @@ def test_drop_data_refresh_recreates_missing_destination_tables(local_pipeline, 
     assert connection.execute("SELECT id FROM lakehouse.raw.events").fetchall() == [(2,)]
 
 
+@pytest.mark.ducklake
+def test_an_unchanged_schema_is_confirmed_in_one_request(local_pipeline, monkeypatch):
+    local_pipeline.run([{"id": 1}], table_name="events")
+    execute = dlt_altertable.api.execute_sql
+    statements = []
+
+    def record(config, statement):
+        statements.append(statement)
+        return execute(config, statement)
+
+    monkeypatch.setattr(dlt_altertable.api, "execute_sql", record)
+
+    with local_pipeline.destination_client() as client:
+        client.update_stored_schema()
+
+    assert statements == [
+        'SELECT 1 FROM "lakehouse"."raw"."_dlt_version" '
+        f"WHERE version_hash = E'{local_pipeline.default_schema.stored_version_hash}'"
+    ]
+
+
 @pytest.mark.parametrize("unauthenticated", [False, True], ids=["stream-error", "authentication"])
 def test_state_lookup_errors_preserve_local_state(server, pipeline, unauthenticated):
     pipeline.run([{"id": 1}], table_name="events")
