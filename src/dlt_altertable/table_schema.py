@@ -95,7 +95,8 @@ def apply_descriptions(
     if column_comments is None:
         targets[f"TABLE {table_name}"] = table.get("description")
     statements = [
-        f"COMMENT ON {target} IS {escape_duckdb_literal(description)};"
+        # DuckDB 2.0 keeps E'' escapes in comments verbatim until duckdb/duckdb#29087 ships.
+        f"COMMENT ON {target} IS '{description.replace("'", "''")}';"
         for target, description in targets.items()
         if description
     ]
