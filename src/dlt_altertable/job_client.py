@@ -217,6 +217,7 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
         only_tables: Iterable[str] | None = None,
         expected_update: TSchemaTables | None = None,
         force: bool = False,
+        include_existing_tables: bool = False,
     ) -> TSchemaTables | None:
         update = super().update_stored_schema(only_tables or (), expected_update or {}, force)
         if self.get_stored_schema_by_hash(self.schema.stored_version_hash) is None:
