@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.3](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.2.2...dlt-altertable-v0.2.3) (2026-11-19)
+
+
+### Bug Fixes
+
+* support dlt 1.32 loads ([#41](https://github.com/altertable-ai/dlt-altertable/issues/41)) ([dec1c46](https://github.com/altertable-ai/dlt-altertable/commit/dec1c465f24d97894aba436a62e5bc286429c633))
+
+
+### Performance Improvements
+
+* check the stored schema version in one request ([#40](https://github.com/altertable-ai/dlt-altertable/issues/40)) ([13e03cf](https://github.com/altertable-ai/dlt-altertable/commit/13e03cf4b9f91a8eae11b5fb9a6b5557bc209a39))
+
+
+### Documentation
+
+* sharpen the README pitch and settings ([#38](https://github.com/altertable-ai/dlt-altertable/issues/38)) ([2d7c1d9](https://github.com/altertable-ai/dlt-altertable/commit/2d7c1d9e3b1869616eb7fd27cd209884a23f998e))
+
 ## [0.2.2](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.2.1...dlt-altertable-v0.2.2) (2026-10-19)
 
 
