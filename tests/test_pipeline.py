@@ -7,6 +7,7 @@ from typing import Any
 import dlt
 import pyarrow as pa
 import pytest
+from dlt.common.pipeline import LoadInfo
 from dlt.common.schema.exceptions import SchemaIdentifierNormalizationCollision
 from dlt.pipeline.exceptions import PipelineStepFailed
 
@@ -37,14 +38,14 @@ def data_uploads(server: FakeServer) -> list[RecordedRequest]:
 
 @pytest.fixture
 def run_pipeline(tmp_path: Path):
-    def run(resource: Any, **destination_options: Any) -> None:
+    def run(resource: Any, **destination_options: Any) -> LoadInfo:
         pipeline = dlt.pipeline(
             pipeline_name="contract",
             destination=altertable(**{**DESTINATION_OPTIONS, **destination_options}),
             dataset_name="raw",
             pipelines_dir=str(tmp_path / "dlt"),
         )
-        pipeline.run(resource)
+        return pipeline.run(resource)
 
     return run
 
@@ -75,6 +76,10 @@ def test_merge_resource_becomes_a_server_side_upsert(server: FakeServer, run_pip
     assert upload.params["primary_key"] == "id"
     assert upload.params["cursor_field"] == "lastmodifieddate"
     assert without_lineage(upload.rows) == CONTACTS
+
+
+def test_load_info_names_the_altertable_destination(server: FakeServer, run_pipeline) -> None:
+    assert run_pipeline(appended_events()).destination_name == "altertable"
 
 
 def test_dlt_lineage_columns_are_loaded(server: FakeServer, run_pipeline) -> None:

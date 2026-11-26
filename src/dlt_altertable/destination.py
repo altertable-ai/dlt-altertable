@@ -140,7 +140,7 @@ def _upload(
 class altertable(CustomDestination):
     def __init__(
         self,
-        destination_name: str = "altertable",
+        destination_name: str | None = None,
         naming_convention: str = "direct",
         max_table_nesting: int | None = 0,
         **kwargs: Any,
@@ -164,7 +164,7 @@ class altertable(CustomDestination):
                 f"altertable does not take dataset_name. {DATASET_NAME_HINT}"
             )
         super().__init__(
-            destination_name=destination_name,
+            destination_name=destination_name or "altertable",
             naming_convention=naming_convention,
             max_table_nesting=max_table_nesting,
             **(kwargs | options),
