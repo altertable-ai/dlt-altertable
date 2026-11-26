@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.2.3...dlt-altertable-v0.2.4) (2026-11-26)
+
+
+### Bug Fixes
+
+* name the altertable destination in load info ([#42](https://github.com/altertable-ai/dlt-altertable/issues/42)) ([2237d21](https://github.com/altertable-ai/dlt-altertable/commit/2237d21d1dc6c04c7422aa2658cef727353515bd))
+
 ## [0.2.3](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.2.2...dlt-altertable-v0.2.3) (2026-11-19)
 
 
