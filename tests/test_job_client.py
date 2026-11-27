@@ -6,6 +6,7 @@ from dlt.common.destination.exceptions import (
     DestinationTerminalException,
     DestinationTransientException,
 )
+from dlt.destinations.impl.destination.destination import DestinationClient
 from dlt.pipeline.exceptions import PipelineStepFailed
 
 import dlt_altertable.api
@@ -25,6 +26,61 @@ def pipeline(tmp_path):
         destination=altertable(**DESTINATION_OPTIONS),
         pipelines_dir=str(tmp_path),
     )
+
+
+@pytest.mark.parametrize("include_existing_tables", [False, True])
+def test_schema_update_forwards_the_existing_tables_flag(
+    server, pipeline, monkeypatch, include_existing_tables
+):
+    calls = []
+
+    def update(self, only_tables, expected_update, force, include_existing_tables=False):
+        calls.append((only_tables, expected_update, force, include_existing_tables))
+        return expected_update
+
+    monkeypatch.setattr(DestinationClient, "update_stored_schema", update)
+    expected_update = {"events": {"name": "events", "columns": {}}}
+    with pipeline.destination_client() as client:
+        result = client.update_stored_schema(
+            only_tables=["events"],
+            expected_update=expected_update,
+            force=True,
+            include_existing_tables=include_existing_tables,
+        )
+
+    assert calls == [(["events"], expected_update, True, include_existing_tables)]
+    assert result is expected_update
+
+
+def test_schema_update_supports_the_dlt_131_signature(server, pipeline, monkeypatch):
+    calls = []
+
+    def update(self, only_tables, expected_update, force):
+        calls.append((only_tables, expected_update, force))
+        return expected_update
+
+    monkeypatch.setattr(DestinationClient, "update_stored_schema", update)
+    with pipeline.destination_client() as client:
+        result = client.update_stored_schema(include_existing_tables=True)
+
+    assert calls == [((), {}, False)]
+    assert result == {}
+
+
+def test_schema_update_does_not_retry_an_internal_type_error(server, pipeline, monkeypatch):
+    calls = []
+
+    def update(self, only_tables, expected_update, force, include_existing_tables=False):
+        calls.append(include_existing_tables)
+        raise TypeError("schema validation failed")
+
+    monkeypatch.setattr(DestinationClient, "update_stored_schema", update)
+    with pipeline.destination_client() as client:
+        with pytest.raises(TypeError, match="schema validation failed"):
+            client.update_stored_schema(include_existing_tables=True)
+
+    assert calls == [True]
+    assert server.statements == []
 
 
 @pytest.mark.parametrize(
