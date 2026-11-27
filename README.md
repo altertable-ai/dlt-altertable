@@ -15,7 +15,8 @@ then [query them](https://altertable.ai/docs/lakehouse/sql-engine) or read them 
 
 ## Install and configure
 
-Requires Python 3.12+ and `dlt >= 1.31, < 2`.
+Requires Python 3.12+ and `dlt >= 1.31, < 1.33`. CI tests both supported dlt
+minors (1.31 and 1.32); newer minors must be checked before extending this range.
 
 ```bash
 uv add dlt-altertable

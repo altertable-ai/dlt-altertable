@@ -2,6 +2,7 @@ from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from datetime import UTC, datetime
 from functools import cached_property, partial
+from inspect import signature
 from typing import cast, override
 from warnings import warn
 
@@ -219,7 +220,17 @@ class AltertableJobClient(DestinationClient, WithStateSync, WithSqlClient):
         force: bool = False,
         include_existing_tables: bool = False,
     ) -> TSchemaTables | None:
-        update = super().update_stored_schema(only_tables or (), expected_update or {}, force)
+        base_update = super().update_stored_schema
+        # dlt 1.32 added this flag; 1.31 still has the three-argument signature.
+        if "include_existing_tables" in signature(base_update).parameters:
+            update = base_update(
+                only_tables or (),
+                expected_update or {},
+                force,
+                include_existing_tables=include_existing_tables,
+            )
+        else:
+            update = base_update(only_tables or (), expected_update or {}, force)
         rows = altertable_api.execute_sql(
             self.dataset_config,
             "SELECT 1 FROM "

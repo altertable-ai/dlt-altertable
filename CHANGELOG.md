@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+
+* Forward `include_existing_tables` when updating stored schemas on dlt 1.32 while retaining compatibility with dlt 1.31.
+* Restrict dlt to the tested 1.31 and 1.32 minors and test each against every supported Python version in CI.
+
 ## [0.2.4](https://github.com/altertable-ai/dlt-altertable/compare/dlt-altertable-v0.2.3...dlt-altertable-v0.2.4) (2026-11-26)
 
 
